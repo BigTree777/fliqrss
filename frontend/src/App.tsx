@@ -1,21 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, ApiError } from './api/client'
 import { ArticleCard } from './components/ArticleCard'
 import { Icon } from './components/Icon'
-import { articles } from './mocks/articles'
-import type { Article } from './types/article'
-
-interface ManagedTag {
-  id: string
-  name: string
-}
-
-interface ManagedSource {
-  id: string
-  name: string
-  url: string
-  format: 'RSS' | 'Atom'
-  enabled: boolean
-}
+import type { Article, ArticleAction, Source, Tag } from './types/article'
 
 type TagFilter = string
 type FilterMode = 'source' | 'tag'
@@ -25,99 +12,7 @@ type LibraryMode = 'favorite' | 'saved' | 'deleted'
 const ALL_TAGS = '__all__'
 const UNTAGGED = '__untagged__'
 const ALL_SOURCES = '__all_sources__'
-const defaultTags: ManagedTag[] = [
-  { id: 'technology', name: 'テクノロジー' },
-  { id: 'business', name: 'ビジネス' },
-  { id: 'culture', name: 'カルチャー' },
-  { id: 'science', name: 'サイエンス' },
-]
-const defaultSourceTags: Record<string, string[]> = {
-  'Orbit Journal': ['technology', 'science'],
-  'Business Field': ['business'],
-  'Nook Magazine': ['culture'],
-  'Scope Science': ['science', 'technology'],
-  'Common Ledger': ['business', 'culture'],
-  'Open Current': ['technology', 'science'],
-}
-const defaultSources: ManagedSource[] = [
-  { id: 'orbit-journal', name: 'Orbit Journal', url: 'https://example.com/orbit/rss.xml', format: 'RSS', enabled: true },
-  { id: 'business-field', name: 'Business Field', url: 'https://example.com/business/atom.xml', format: 'Atom', enabled: true },
-  { id: 'nook-magazine', name: 'Nook Magazine', url: 'https://example.com/nook/feed.xml', format: 'RSS', enabled: true },
-  { id: 'scope-science', name: 'Scope Science', url: 'https://example.com/scope/atom.xml', format: 'Atom', enabled: true },
-  { id: 'common-ledger', name: 'Common Ledger', url: 'https://example.com/ledger/rss.xml', format: 'RSS', enabled: true },
-  { id: 'open-current', name: 'Open Current', url: 'https://example.com/current/feed.xml', format: 'RSS', enabled: true },
-]
 const SWIPE_THRESHOLD = 92
-const STORAGE_KEYS = {
-  deleted: 'fliqrss:deleted',
-  favorite: 'fliqrss:favorite',
-  read: 'fliqrss:read',
-  saved: 'fliqrss:saved',
-  skipped: 'fliqrss:skipped',
-  sources: 'fliqrss:sources',
-  sourceTags: 'fliqrss:source-tags',
-  tags: 'fliqrss:tags',
-} as const
-
-function readStoredTags(): ManagedTag[] {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.tags) ?? 'null')
-    if (!Array.isArray(stored)) return defaultTags
-    return stored.filter((item): item is ManagedTag => (
-      typeof item === 'object'
-      && item !== null
-      && typeof item.id === 'string'
-      && typeof item.name === 'string'
-      && item.name.trim().length > 0
-    ))
-  } catch {
-    return defaultTags
-  }
-}
-
-function readStoredSourceTags(): Record<string, string[]> {
-  try {
-    const stored: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.sourceTags) ?? 'null')
-    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return defaultSourceTags
-    return Object.fromEntries(Object.entries(stored).map(([source, tagIds]) => [
-      source,
-      Array.isArray(tagIds) ? tagIds.filter((id): id is string => typeof id === 'string') : [],
-    ]))
-  } catch {
-    return defaultSourceTags
-  }
-}
-
-function readStoredSources(): ManagedSource[] {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.sources) ?? 'null')
-    if (!Array.isArray(stored)) return defaultSources
-    return stored.filter((item): item is ManagedSource => (
-      typeof item === 'object'
-      && item !== null
-      && typeof item.id === 'string'
-      && typeof item.name === 'string'
-      && typeof item.url === 'string'
-      && (item.format === 'RSS' || item.format === 'Atom')
-      && typeof item.enabled === 'boolean'
-    ))
-  } catch {
-    return defaultSources
-  }
-}
-
-function detectMockFeedFormat(url: string): ManagedSource['format'] {
-  return url.toLocaleLowerCase().includes('atom') ? 'Atom' : 'RSS'
-}
-
-function readStoredIds(key: string): Set<string> {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(key) ?? '[]')
-    return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : [])
-  } catch {
-    return new Set()
-  }
-}
 
 function libraryModeFromHash(): LibraryMode | null {
   if (window.location.hash === '#/favorites') return 'favorite'
@@ -129,14 +24,14 @@ function libraryModeFromHash(): LibraryMode | null {
 function App() {
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
   const [source, setSource] = useState(ALL_SOURCES)
-  const [managedSources, setManagedSources] = useState<ManagedSource[]>(readStoredSources)
+  const [articles, setArticles] = useState<Article[]>([])
+  const [managedSources, setManagedSources] = useState<Source[]>([])
   const [sourceManagerOpen, setSourceManagerOpen] = useState(() => window.location.hash === '#/sources')
   const [newSourceName, setNewSourceName] = useState('')
   const [newSourceUrl, setNewSourceUrl] = useState('')
   const [openTagPickerSourceId, setOpenTagPickerSourceId] = useState<string | null>(null)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
-  const [managedTags, setManagedTags] = useState<ManagedTag[]>(readStoredTags)
-  const [sourceTags, setSourceTags] = useState<Record<string, string[]>>(readStoredSourceTags)
+  const [managedTags, setManagedTags] = useState<Tag[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(() => window.location.hash === '#/tags')
   const [menuOpen, setMenuOpen] = useState(false)
   const [newTagName, setNewTagName] = useState('')
@@ -145,38 +40,40 @@ function App() {
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [animating, setAnimating] = useState(false)
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => readStoredIds(STORAGE_KEYS.deleted))
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => readStoredIds(STORAGE_KEYS.favorite))
-  const [savedIds, setSavedIds] = useState<Set<string>>(() => readStoredIds(STORAGE_KEYS.saved))
-  const [readIds, setReadIds] = useState<Set<string>>(() => readStoredIds(STORAGE_KEYS.read))
-  const [skippedIds, setSkippedIds] = useState<Set<string>>(() => readStoredIds(STORAGE_KEYS.skipped))
   const [openArticle, setOpenArticle] = useState<Article | null>(null)
   const [libraryMode, setLibraryMode] = useState<LibraryMode | null>(() => libraryModeFromHash())
   const [notice, setNotice] = useState('')
+  const [apiError, setApiError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState(false)
   const pointerStart = useRef(0)
   const activePointer = useRef<number | null>(null)
   const animationTimer = useRef<number | null>(null)
   const noticeTimer = useRef<number | null>(null)
 
-  const knownTagIds = useMemo(() => new Set(managedTags.map((item) => item.id)), [managedTags])
-  const tagIdsForSource = useCallback((source: string) => (
-    (sourceTags[source] ?? []).filter((tagId) => knownTagIds.has(tagId))
-  ), [knownTagIds, sourceTags])
+  const deletedIds = useMemo(() => new Set(articles.filter((item) => item.state.deleted).map((item) => item.id)), [articles])
+  const favoriteIds = useMemo(() => new Set(articles.filter((item) => item.state.favorite).map((item) => item.id)), [articles])
+  const savedIds = useMemo(() => new Set(articles.filter((item) => item.state.saved).map((item) => item.id)), [articles])
+  const readIds = useMemo(() => new Set(articles.filter((item) => item.state.read).map((item) => item.id)), [articles])
+  const skippedIds = useMemo(() => new Set(articles.filter((item) => item.state.skipped).map((item) => item.id)), [articles])
+  const tagIdsForSource = useCallback((sourceId: string) => (
+    managedSources.find((item) => item.id === sourceId)?.tagIds ?? []
+  ), [managedSources])
   const selectionArticles = useMemo(() => {
     if (filterMode === 'source') {
-      return source === ALL_SOURCES ? articles : articles.filter((article) => article.source === source)
+      return source === ALL_SOURCES ? articles : articles.filter((article) => article.sourceId === source)
     }
     if (tag === ALL_TAGS) return articles
-    if (tag === UNTAGGED) return articles.filter((article) => tagIdsForSource(article.source).length === 0)
-    return articles.filter((article) => tagIdsForSource(article.source).includes(tag))
+    if (tag === UNTAGGED) return articles.filter((article) => article.tagIds.length === 0)
+    return articles.filter((article) => article.tagIds.includes(tag))
   }, [filterMode, source, tag, tagIdsForSource])
 
   const untaggedCount = useMemo(
-    () => articles.filter((article) => tagIdsForSource(article.source).length === 0).length,
-    [tagIdsForSource],
+    () => articles.filter((article) => article.tagIds.length === 0).length,
+    [articles],
   )
 
-  const tagNamesForSource = useCallback((source: string) => tagIdsForSource(source).map(
+  const tagNamesForSource = useCallback((sourceId: string) => tagIdsForSource(sourceId).map(
     (tagId) => managedTags.find((item) => item.id === tagId)?.name,
   ).filter((name): name is string => Boolean(name)), [managedTags, tagIdsForSource])
 
@@ -188,7 +85,7 @@ function App() {
 
   const sourceOptions = useMemo(() => [
     { id: ALL_SOURCES, name: 'すべてのソース' },
-    ...managedSources.map((item) => ({ id: item.name, name: item.name })),
+    ...managedSources.map((item) => ({ id: item.id, name: item.name })),
   ], [managedSources])
 
   const filteredArticles = useMemo(
@@ -205,6 +102,47 @@ function App() {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
     noticeTimer.current = window.setTimeout(() => setNotice(''), 1800)
   }, [])
+
+  const showApiError = useCallback((error: unknown) => {
+    const message = error instanceof ApiError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : 'バックエンドと通信できません'
+    setApiError(message)
+    showNotice('操作に失敗しました')
+  }, [showNotice])
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [nextArticles, nextSources, nextTags] = await Promise.all([
+        api.listArticles(),
+        api.listSources(),
+        api.listTags(),
+      ])
+      setArticles(nextArticles)
+      setManagedSources(nextSources)
+      setManagedTags(nextTags)
+      setApiError('')
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setLoading(false)
+    }
+  }, [showApiError])
+
+  const replaceArticle = useCallback((nextArticle: Article) => {
+    setArticles((current) => current.map((item) => item.id === nextArticle.id ? nextArticle : item))
+    setOpenArticle((current) => current?.id === nextArticle.id ? nextArticle : current)
+  }, [])
+
+  const updateArticleState = useCallback(async (articleId: string, action: ArticleAction) => {
+    const nextArticle = await api.updateArticleState(articleId, action)
+    replaceArticle(nextArticle)
+    setApiError('')
+    return nextArticle
+  }, [replaceArticle])
 
   const navigateToLibrary = (mode: LibraryMode) => {
     const paths: Record<LibraryMode, string> = {
@@ -235,121 +173,147 @@ function App() {
     window.location.hash = '#/sources'
   }
 
-  const addSource = (event: React.FormEvent<HTMLFormElement>) => {
+  const addSource = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = newSourceName.trim()
     const url = newSourceUrl.trim()
     if (!name || !url) return
-    if (managedSources.some((item) => item.url.toLocaleLowerCase() === url.toLocaleLowerCase())) {
-      showNotice('同じURLのソースがあります')
-      return
+    setPending(true)
+    try {
+      const created = await api.createSource(name, url)
+      const nextArticles = await api.listArticles()
+      setManagedSources((current) => [...current, created])
+      setArticles(nextArticles)
+      setNewSourceName('')
+      setNewSourceUrl('')
+      setApiError('')
+      showNotice('ニュースソースを追加しました')
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setPending(false)
     }
-    setManagedSources((current) => [...current, {
-      id: `source-${Date.now()}`,
-      name,
-      url,
-      format: detectMockFeedFormat(url),
-      enabled: true,
-    }])
-    setNewSourceName('')
-    setNewSourceUrl('')
-    showNotice('ニュースソースを追加しました')
   }
 
-  const toggleSourceEnabled = (sourceId: string) => {
-    setManagedSources((current) => current.map((item) => (
-      item.id === sourceId ? { ...item, enabled: !item.enabled } : item
-    )))
+  const toggleSourceEnabled = async (targetSource: Source) => {
+    try {
+      const updated = await api.updateSource(targetSource.id, { enabled: !targetSource.enabled })
+      setManagedSources((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setApiError('')
+    } catch (error) {
+      showApiError(error)
+    }
   }
 
-  const deleteSource = (targetSource: ManagedSource) => {
-    setManagedSources((current) => current.filter((item) => item.id !== targetSource.id))
-    setSourceTags((current) => {
-      const next = { ...current }
-      delete next[targetSource.name]
-      return next
-    })
-    if (source === targetSource.name) setSource(ALL_SOURCES)
-    if (openTagPickerSourceId === targetSource.id) setOpenTagPickerSourceId(null)
-    showNotice('ニュースソースを削除しました')
+  const deleteSource = async (targetSource: Source) => {
+    try {
+      await api.deleteSource(targetSource.id)
+      setManagedSources((current) => current.filter((item) => item.id !== targetSource.id))
+      setArticles((current) => current.filter((item) => item.sourceId !== targetSource.id))
+      if (source === targetSource.id) setSource(ALL_SOURCES)
+      if (openTagPickerSourceId === targetSource.id) setOpenTagPickerSourceId(null)
+      setApiError('')
+      showNotice('ニュースソースを削除しました')
+    } catch (error) {
+      showApiError(error)
+    }
   }
 
-  const addTag = (event: React.FormEvent<HTMLFormElement>) => {
+  const addTag = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = newTagName.trim()
     if (!name) return
-    if (managedTags.some((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-      showNotice('同じ名前のタグがあります')
-      return
+    try {
+      const created = await api.createTag(name)
+      setManagedTags((current) => [...current, created])
+      setNewTagName('')
+      setApiError('')
+      showNotice('タグを追加しました')
+    } catch (error) {
+      showApiError(error)
     }
-    setManagedTags((current) => [...current, { id: `custom-${Date.now()}`, name }])
-    setNewTagName('')
-    showNotice('タグを追加しました')
   }
 
-  const startEditingTag = (item: ManagedTag) => {
+  const startEditingTag = (item: Tag) => {
     setEditingTagId(item.id)
     setEditingTagName(item.name)
   }
 
-  const saveTagName = (event: React.FormEvent<HTMLFormElement>) => {
+  const saveTagName = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = editingTagName.trim()
     if (!editingTagId || !name) return
-    if (managedTags.some((item) => item.id !== editingTagId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-      showNotice('同じ名前のタグがあります')
-      return
+    try {
+      const updated = await api.updateTag(editingTagId, name)
+      setManagedTags((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setEditingTagId(null)
+      setApiError('')
+      showNotice('タグ名を変更しました')
+    } catch (error) {
+      showApiError(error)
     }
-    setManagedTags((current) => current.map((item) => (
-      item.id === editingTagId ? { ...item, name } : item
-    )))
-    setEditingTagId(null)
-    showNotice('タグ名を変更しました')
   }
 
-  const deleteTag = (tagId: string) => {
-    setManagedTags((current) => current.filter((item) => item.id !== tagId))
-    setSourceTags((current) => Object.fromEntries(Object.entries(current).map(([source, tagIds]) => [
-      source,
-      tagIds.filter((id) => id !== tagId),
-    ])))
-    if (tag === tagId) setTag(ALL_TAGS)
-    if (editingTagId === tagId) setEditingTagId(null)
-    showNotice('タグを削除しました')
+  const deleteTag = async (tagId: string) => {
+    try {
+      await api.deleteTag(tagId)
+      setManagedTags((current) => current.filter((item) => item.id !== tagId))
+      setManagedSources((current) => current.map((item) => ({
+        ...item,
+        tagIds: item.tagIds.filter((id) => id !== tagId),
+      })))
+      setArticles((current) => current.map((item) => ({
+        ...item,
+        tagIds: item.tagIds.filter((id) => id !== tagId),
+      })))
+      if (tag === tagId) setTag(ALL_TAGS)
+      if (editingTagId === tagId) setEditingTagId(null)
+      setApiError('')
+      showNotice('タグを削除しました')
+    } catch (error) {
+      showApiError(error)
+    }
   }
 
-  const toggleSourceTag = (source: string, tagId: string) => {
-    setSourceTags((current) => {
-      const currentTagIds = current[source] ?? []
-      const nextTagIds = currentTagIds.includes(tagId)
-        ? currentTagIds.filter((id) => id !== tagId)
-        : [...currentTagIds, tagId]
-      return { ...current, [source]: nextTagIds }
-    })
+  const toggleSourceTag = async (targetSource: Source, tagId: string) => {
+    const nextTagIds = targetSource.tagIds.includes(tagId)
+      ? targetSource.tagIds.filter((id) => id !== tagId)
+      : [...targetSource.tagIds, tagId]
+    try {
+      const updated = await api.setSourceTags(targetSource.id, nextTagIds)
+      setManagedSources((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setArticles((current) => current.map((item) => (
+        item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
+      )))
+      setApiError('')
+    } catch (error) {
+      showApiError(error)
+    }
   }
 
   const completeSwipe = useCallback(
-    (action: SwipeAction) => {
+    async (action: SwipeAction) => {
       if (!currentArticle || animating) return
 
       setAnimating(true)
       setDragging(false)
-      const direction = action === 'save' ? 1 : -1
-      setDragX(direction * Math.max(window.innerWidth * 0.7, 680))
-      showNotice(action === 'save' ? 'あとで読むに保存しました' : '既読にしました')
-
-      animationTimer.current = window.setTimeout(() => {
-        if (action === 'save') {
-          setSavedIds((current) => new Set(current).add(currentArticle.id))
-        } else if (action === 'skip') {
-          setReadIds((current) => new Set(current).add(currentArticle.id))
-          setSkippedIds((current) => new Set(current).add(currentArticle.id))
-        }
+      try {
+        const nextArticle = await api.updateArticleState(currentArticle.id, action)
+        const direction = action === 'save' ? 1 : -1
+        setDragX(direction * Math.max(window.innerWidth * 0.7, 680))
+        showNotice(action === 'save' ? 'あとで読むに保存しました' : '既読にしました')
+        animationTimer.current = window.setTimeout(() => {
+          replaceArticle(nextArticle)
+          setDragX(0)
+          setAnimating(false)
+        }, 260)
+      } catch (error) {
         setDragX(0)
         setAnimating(false)
-      }, 260)
+        showApiError(error)
+      }
     },
-    [animating, currentArticle, showNotice],
+    [animating, currentArticle, replaceArticle, showApiError, showNotice],
   )
 
   const selectTag = (nextTag: TagFilter) => {
@@ -370,102 +334,69 @@ function App() {
     setDragX(0)
   }
 
-  const openDetail = (article: Article) => {
-    setReadIds((current) => new Set(current).add(article.id))
+  const openDetail = async (article: Article) => {
     setOpenArticle(article)
-  }
-
-  const toggleFavorite = (articleId: string) => {
-    setFavoriteIds((current) => {
-      const next = new Set(current)
-      if (next.has(articleId)) {
-        next.delete(articleId)
-        showNotice('お気に入りから外しました')
-      } else {
-        next.add(articleId)
-        showNotice('お気に入りに追加しました')
-      }
-      return next
-    })
-  }
-
-  const deleteArticle = (articleId: string) => {
-    setDeletedIds((current) => new Set(current).add(articleId))
-    setFavoriteIds((current) => {
-      const next = new Set(current)
-      next.delete(articleId)
-      return next
-    })
-    showNotice('削除記事一覧へ移動しました')
-  }
-
-  const removeFromLibrary = (articleId: string) => {
-    if (libraryMode === 'favorite') {
-      setFavoriteIds((current) => {
-        const next = new Set(current)
-        next.delete(articleId)
-        return next
-      })
-      showNotice('お気に入りから外しました')
-    } else if (libraryMode === 'saved') {
-      setSavedIds((current) => {
-        const next = new Set(current)
-        next.delete(articleId)
-        return next
-      })
-      showNotice('保存を解除しました')
-    } else if (libraryMode === 'deleted') {
-      setDeletedIds((current) => {
-        const next = new Set(current)
-        next.delete(articleId)
-        return next
-      })
-      showNotice('削除記事一覧から戻しました')
+    if (article.state.read) return
+    try {
+      await updateArticleState(article.id, 'read')
+    } catch (error) {
+      showApiError(error)
     }
   }
 
-  const restoreSkippedArticles = () => {
-    setReadIds((current) => {
-      const next = new Set(current)
-      skippedIds.forEach((id) => next.delete(id))
-      return next
-    })
-    setSkippedIds(new Set())
-    setDragX(0)
-    showNotice('スキップした記事を戻しました')
+  const toggleFavorite = async (articleId: string) => {
+    const article = articles.find((item) => item.id === articleId)
+    if (!article) return
+    try {
+      await updateArticleState(articleId, article.state.favorite ? 'unfavorite' : 'favorite')
+      showNotice(article.state.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました')
+    } catch (error) {
+      showApiError(error)
+    }
+  }
+
+  const deleteArticle = async (articleId: string) => {
+    try {
+      await updateArticleState(articleId, 'delete')
+      showNotice('削除記事一覧へ移動しました')
+    } catch (error) {
+      showApiError(error)
+    }
+  }
+
+  const removeFromLibrary = async (articleId: string) => {
+    const action = libraryMode === 'favorite'
+      ? 'unfavorite'
+      : libraryMode === 'saved'
+        ? 'unsave'
+        : 'restore'
+    try {
+      await updateArticleState(articleId, action)
+      showNotice(libraryMode === 'favorite'
+        ? 'お気に入りから外しました'
+        : libraryMode === 'saved'
+          ? '保存を解除しました'
+          : '削除記事一覧から戻しました')
+    } catch (error) {
+      showApiError(error)
+    }
+  }
+
+  const restoreSkippedArticles = async () => {
+    try {
+      const result = await api.resetSkipped()
+      setArticles(await api.listArticles())
+      setDragX(0)
+      setApiError('')
+      showNotice(`${result.restored}件のスキップを解除しました`)
+    } catch (error) {
+      showApiError(error)
+    }
   }
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.sources, JSON.stringify(managedSources))
-  }, [managedSources])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.tags, JSON.stringify(managedTags))
-  }, [managedTags])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.sourceTags, JSON.stringify(sourceTags))
-  }, [sourceTags])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.deleted, JSON.stringify([...deletedIds]))
-  }, [deletedIds])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.favorite, JSON.stringify([...favoriteIds]))
-  }, [favoriteIds])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.saved, JSON.stringify([...savedIds]))
-  }, [savedIds])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.read, JSON.stringify([...readIds]))
-  }, [readIds])
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.skipped, JSON.stringify([...skippedIds]))
-  }, [skippedIds])
+    void loadData()
+  }, [loadData])
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -559,7 +490,7 @@ function App() {
       : deletedIds
   const libraryArticles = articles.filter((article) => libraryIds.has(article.id))
   const remainingTagCount = (targetTag: TagFilter) => articles.filter((article) => {
-    const articleTagIds = tagIdsForSource(article.source)
+    const articleTagIds = article.tagIds
     const belongsToTag = targetTag === ALL_TAGS
       || (targetTag === UNTAGGED ? articleTagIds.length === 0 : articleTagIds.includes(targetTag))
     return belongsToTag
@@ -569,7 +500,7 @@ function App() {
   }).length
 
   const remainingSourceCount = (targetSource: string) => articles.filter((article) => (
-    (targetSource === ALL_SOURCES || article.source === targetSource)
+    (targetSource === ALL_SOURCES || article.sourceId === targetSource)
       && !readIds.has(article.id)
       && !savedIds.has(article.id)
       && !deletedIds.has(article.id)
@@ -589,7 +520,7 @@ function App() {
 
         <div className="topbar-status">
           <span className="live-dot" />
-          <span>モックフィード</span>
+          <span>{loading ? 'API接続中' : apiError ? 'APIエラー' : 'API接続済み'}</span>
           <span className="status-divider" />
           <span>{articles.length} stories</span>
         </div>
@@ -641,6 +572,13 @@ function App() {
         </div>
       </header>
 
+      {apiError && (
+        <div className="api-error" role="alert">
+          <span>{apiError}</span>
+          <button onClick={() => void loadData()} type="button">再試行</button>
+        </div>
+      )}
+
       {sourceManagerOpen ? (
         <main className="category-page" id="top">
           <div className="library-page-heading">
@@ -678,7 +616,9 @@ function App() {
                 value={newSourceUrl}
               />
             </div>
-            <button className="source-add-button" disabled={!newSourceName.trim() || !newSourceUrl.trim()} type="submit">追加</button>
+            <button className="source-add-button" disabled={pending || !newSourceName.trim() || !newSourceUrl.trim()} type="submit">
+              {pending ? '取得中' : '追加'}
+            </button>
           </form>
 
           <section className="source-manager-list" aria-label="ニュースソース一覧">
@@ -691,13 +631,13 @@ function App() {
                     <span className={`source-status ${item.enabled ? 'is-enabled' : ''}`}>
                       {item.enabled ? '取得中' : '停止中'}
                     </span>
-                    <span className="source-format">{item.format}</span>
+                    <span className="source-format">{item.format.toUpperCase()}</span>
                   </div>
                   <a href={item.url} rel="noreferrer" target="_blank">{item.url}</a>
                   <div className="source-tag-control">
                     <div className="selected-source-tags" aria-label={`${item.name}に設定中のタグ`}>
-                      {tagNamesForSource(item.name).map((tagName) => <span key={tagName}>{tagName}</span>)}
-                      {!tagNamesForSource(item.name).length && <em>タグなし</em>}
+                      {tagNamesForSource(item.id).map((tagName) => <span key={tagName}>{tagName}</span>)}
+                      {!tagNamesForSource(item.id).length && <em>タグなし</em>}
                     </div>
                     <button
                       aria-expanded={openTagPickerSourceId === item.id}
@@ -718,13 +658,13 @@ function App() {
                           </div>
                           <div className="tag-picker-list">
                             {managedTags.map((tagItem) => {
-                              const selected = tagIdsForSource(item.name).includes(tagItem.id)
+                              const selected = tagIdsForSource(item.id).includes(tagItem.id)
                               return (
                                 <button
                                   aria-pressed={selected}
                                   className={selected ? 'is-active' : ''}
                                   key={tagItem.id}
-                                  onClick={() => toggleSourceTag(item.name, tagItem.id)}
+                                  onClick={() => void toggleSourceTag(item, tagItem.id)}
                                   type="button"
                                 >
                                   <span>{selected ? '✓' : ''}</span>
@@ -740,7 +680,7 @@ function App() {
                   </div>
                 </div>
                 <div className="source-manager-actions">
-                  <button onClick={() => toggleSourceEnabled(item.id)} type="button">
+                  <button onClick={() => void toggleSourceEnabled(item)} type="button">
                     {item.enabled ? '停止' : '再開'}
                   </button>
                   <button className="category-delete-button" onClick={() => deleteSource(item)} type="button">削除</button>
@@ -749,7 +689,7 @@ function App() {
             ))}
             {!managedSources.length && <div className="library-empty">ニュースソースがありません.</div>}
           </section>
-          <p className="source-mock-note">形式は自動判定します. 現在はURLによる簡易判定で, バックエンド接続後は取得したXMLの内容から判定します.</p>
+          <p className="source-mock-note">形式は取得したXMLの内容から自動判定します.</p>
         </main>
       ) : tagManagerOpen ? (
         <main className="category-page" id="top">
@@ -786,7 +726,7 @@ function App() {
               <span>操作</span>
             </div>
             {managedTags.map((item) => {
-              const sourceCount = managedSources.filter((sourceItem) => tagIdsForSource(sourceItem.name).includes(item.id)).length
+              const sourceCount = managedSources.filter((sourceItem) => tagIdsForSource(sourceItem.id).includes(item.id)).length
               return (
                 <div className="category-manager-item" key={item.id}>
                   {editingTagId === item.id ? (
@@ -841,7 +781,7 @@ function App() {
               <article className="library-item" key={article.id}>
                 <div className={`queue-thumb queue-thumb--${article.visualTheme}`}>{article.sourceInitials}</div>
                 <button className="library-article-title" onClick={() => openDetail(article)} type="button">
-                  <span>{tagNamesForSource(article.source).join(' / ') || 'タグなし'} · {article.source}</span>
+                  <span>{tagNamesForSource(article.sourceId).join(' / ') || 'タグなし'} · {article.source}</span>
                   <strong>{article.title}</strong>
                 </button>
                 <button className="library-remove" onClick={() => removeFromLibrary(article.id)} type="button">
@@ -938,13 +878,18 @@ function App() {
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
 
           <div className="card-stage">
-            {currentArticle ? (
+            {loading ? (
+              <div className="queue-complete">
+                <p className="eyebrow">CONNECTING</p>
+                <h2>記事を取得しています</h2>
+              </div>
+            ) : currentArticle ? (
               <>
                 <div className="stack-card stack-card--back" />
                 <div className="stack-card stack-card--middle" />
                 <ArticleCard
                   article={currentArticle}
-                  tagLabels={tagNamesForSource(currentArticle.source)}
+                  tagLabels={tagNamesForSource(currentArticle.sourceId)}
                   dragX={dragX}
                   dragging={dragging}
                   isFavorite={favoriteIds.has(currentArticle.id)}
@@ -1021,13 +966,15 @@ function App() {
                 <span>{openArticle.publishedAt}</span>
               </div>
               <div className="article-tags modal-tags">
-                {(tagNamesForSource(openArticle.source).length ? tagNamesForSource(openArticle.source) : ['タグなし']).map(
+                {(tagNamesForSource(openArticle.sourceId).length ? tagNamesForSource(openArticle.sourceId) : ['タグなし']).map(
                   (tagName) => <span key={tagName}>{tagName}</span>,
                 )}
               </div>
               <h2 id="detail-title">{openArticle.title}</h2>
               {openArticle.body.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-              <div className="mock-note">これはUI確認用のダミー記事です.</div>
+              {openArticle.url && (
+                <a className="mock-note" href={openArticle.url} rel="noreferrer" target="_blank">元の記事を開く</a>
+              )}
               <button
                 aria-pressed={favoriteIds.has(openArticle.id)}
                 className={`modal-favorite ${favoriteIds.has(openArticle.id) ? 'is-active' : ''}`}

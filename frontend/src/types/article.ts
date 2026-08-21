@@ -2,13 +2,54 @@ export type VisualTheme = 'cobalt' | 'coral' | 'forest' | 'violet' | 'amber' | '
 
 export interface Article {
   id: string
+  sourceId: string
   source: string
   sourceInitials: string
   publishedAt: string
   readTime: number
   title: string
+  url?: string
   summary: string
   body: string[]
   visualLabel: string
   visualTheme: VisualTheme
+  tagIds: string[]
+  state: ArticleState
+}
+
+export interface ArticleState {
+  read: boolean
+  skipped: boolean
+  saved: boolean
+  favorite: boolean
+  deleted: boolean
+}
+
+export type ArticleAction =
+  | 'read'
+  | 'unread'
+  | 'skip'
+  | 'save'
+  | 'unsave'
+  | 'favorite'
+  | 'unfavorite'
+  | 'delete'
+  | 'restore'
+
+export interface Source {
+  id: string
+  name: string
+  url: string
+  format: 'rss' | 'atom'
+  enabled: boolean
+  tagIds: string[]
+  articleCount: number
+  lastFetchedAt: string | null
+  createdAt: string
+}
+
+export interface Tag {
+  id: string
+  name: string
+  createdAt: string
 }

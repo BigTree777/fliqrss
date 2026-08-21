@@ -1928,3 +1928,26 @@ kbd {
     animation-duration: 0.01ms !important;
   }
 }
+/* API connection status */
+.api-error {
+  align-items: center;
+  background: #fff0ed;
+  border-bottom: 1px solid #efb6aa;
+  color: #7e2e20;
+  display: flex;
+  font-size: 0.86rem;
+  gap: 18px;
+  justify-content: center;
+  padding: 10px 20px;
+}
+
+.api-error button {
+  background: #7e2e20;
+  border: 0;
+  border-radius: 999px;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 5px 14px;
+}
