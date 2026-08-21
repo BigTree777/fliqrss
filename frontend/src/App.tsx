@@ -3,7 +3,7 @@ import { api, ApiError } from './api/client'
 import type { OPMLImportResult } from './api/client'
 import { ArticleCard } from './components/ArticleCard'
 import { Icon } from './components/Icon'
-import type { Article, ArticleAction, Source, Tag } from './types/article'
+import type { Article, ArticleAction, ArticleStats, Source, Tag } from './types/article'
 
 type TagFilter = string
 type FilterMode = 'source' | 'tag'
@@ -14,6 +14,20 @@ const ALL_TAGS = '__all__'
 const UNTAGGED = '__untagged__'
 const ALL_SOURCES = '__all_sources__'
 const SWIPE_THRESHOLD = 92
+const FEED_PAGE_SIZE = 20
+const PREFETCH_THRESHOLD = 5
+const LIBRARY_PAGE_SIZE = 50
+
+const emptyArticleStats: ArticleStats = {
+  feed: 0,
+  favorite: 0,
+  saved: 0,
+  deleted: 0,
+  skipped: 0,
+  untaggedFeed: 0,
+  sourceFeedCounts: {},
+  tagFeedCounts: {},
+}
 
 function libraryModeFromHash(): LibraryMode | null {
   if (window.location.hash === '#/favorites') return 'favorite'
@@ -26,6 +40,15 @@ function App() {
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
   const [source, setSource] = useState(ALL_SOURCES)
   const [articles, setArticles] = useState<Article[]>([])
+  const [nextCursor, setNextCursor] = useState<string | undefined>()
+  const [feedTotal, setFeedTotal] = useState(0)
+  const [processedCount, setProcessedCount] = useState(0)
+  const [prefetching, setPrefetching] = useState(false)
+  const [articleStats, setArticleStats] = useState<ArticleStats>(emptyArticleStats)
+  const [libraryArticles, setLibraryArticles] = useState<Article[]>([])
+  const [libraryNextCursor, setLibraryNextCursor] = useState<string | undefined>()
+  const [libraryTotal, setLibraryTotal] = useState(0)
+  const [libraryLoading, setLibraryLoading] = useState(false)
   const [managedSources, setManagedSources] = useState<Source[]>([])
   const [sourceManagerOpen, setSourceManagerOpen] = useState(() => window.location.hash === '#/sources')
   const [newSourceName, setNewSourceName] = useState('')
@@ -55,29 +78,11 @@ function App() {
   const animationTimer = useRef<number | null>(null)
   const noticeTimer = useRef<number | null>(null)
   const opmlInput = useRef<HTMLInputElement | null>(null)
-
-  const deletedIds = useMemo(() => new Set(articles.filter((item) => item.state.deleted).map((item) => item.id)), [articles])
-  const favoriteIds = useMemo(() => new Set(articles.filter((item) => item.state.favorite).map((item) => item.id)), [articles])
-  const savedIds = useMemo(() => new Set(articles.filter((item) => item.state.saved).map((item) => item.id)), [articles])
-  const readIds = useMemo(() => new Set(articles.filter((item) => item.state.read).map((item) => item.id)), [articles])
-  const skippedIds = useMemo(() => new Set(articles.filter((item) => item.state.skipped).map((item) => item.id)), [articles])
+  const feedRequestID = useRef(0)
+  const libraryRequestID = useRef(0)
   const tagIdsForSource = useCallback((sourceId: string) => (
     managedSources.find((item) => item.id === sourceId)?.tagIds ?? []
   ), [managedSources])
-  const selectionArticles = useMemo(() => {
-    if (filterMode === 'source') {
-      return source === ALL_SOURCES ? articles : articles.filter((article) => article.sourceId === source)
-    }
-    if (tag === ALL_TAGS) return articles
-    if (tag === UNTAGGED) return articles.filter((article) => article.tagIds.length === 0)
-    return articles.filter((article) => article.tagIds.includes(tag))
-  }, [filterMode, source, tag, tagIdsForSource])
-
-  const untaggedCount = useMemo(
-    () => articles.filter((article) => article.tagIds.length === 0).length,
-    [articles],
-  )
-
   const tagNamesForSource = useCallback((sourceId: string) => tagIdsForSource(sourceId).map(
     (tagId) => managedTags.find((item) => item.id === tagId)?.name,
   ).filter((name): name is string => Boolean(name)), [managedTags, tagIdsForSource])
@@ -85,22 +90,15 @@ function App() {
   const tagOptions = useMemo(() => [
     { id: ALL_TAGS, name: 'すべて' },
     ...managedTags,
-    ...(untaggedCount ? [{ id: UNTAGGED, name: 'タグなし' }] : []),
-  ], [managedTags, untaggedCount])
+    ...(articleStats.untaggedFeed ? [{ id: UNTAGGED, name: 'タグなし' }] : []),
+  ], [articleStats.untaggedFeed, managedTags])
 
   const sourceOptions = useMemo(() => [
     { id: ALL_SOURCES, name: 'すべてのソース' },
     ...managedSources.map((item) => ({ id: item.id, name: item.name })),
   ], [managedSources])
 
-  const filteredArticles = useMemo(
-    () => selectionArticles.filter(
-      (article) => !readIds.has(article.id) && !savedIds.has(article.id) && !deletedIds.has(article.id),
-    ),
-    [deletedIds, readIds, savedIds, selectionArticles],
-  )
-
-  const currentArticle = filteredArticles[0]
+  const currentArticle = articles[0]
 
   const showNotice = useCallback((message: string) => {
     setNotice(message)
@@ -118,27 +116,60 @@ function App() {
     showNotice('操作に失敗しました')
   }, [showNotice])
 
-  const loadData = useCallback(async () => {
+  const refreshStats = useCallback(async () => {
+    const nextStats = await api.articleStats()
+    setArticleStats(nextStats)
+    return nextStats
+  }, [])
+
+  const feedPageQuery = useCallback((cursor?: string) => ({
+    state: 'feed' as const,
+    sourceId: filterMode === 'source' && source !== ALL_SOURCES ? source : undefined,
+    tagId: filterMode === 'tag' && tag !== ALL_TAGS && tag !== UNTAGGED ? tag : undefined,
+    untagged: filterMode === 'tag' && tag === UNTAGGED,
+    cursor,
+    limit: FEED_PAGE_SIZE,
+  }), [filterMode, source, tag])
+
+  const loadFeed = useCallback(async () => {
+    const requestID = ++feedRequestID.current
     setLoading(true)
+    setArticles([])
+    setNextCursor(undefined)
+    setProcessedCount(0)
     try {
-      const [nextArticles, nextSources, nextTags] = await Promise.all([
-        api.listArticles(),
+      const page = await api.listArticlePage(feedPageQuery())
+      if (requestID !== feedRequestID.current) return
+      setArticles(page.items)
+      setNextCursor(page.nextCursor)
+      setFeedTotal(page.total)
+      setApiError('')
+    } catch (error) {
+      if (requestID === feedRequestID.current) showApiError(error)
+    } finally {
+      if (requestID === feedRequestID.current) setLoading(false)
+    }
+  }, [feedPageQuery, showApiError])
+
+  const loadData = useCallback(async () => {
+    try {
+      const [nextSources, nextTags, nextStats] = await Promise.all([
         api.listSources(),
         api.listTags(),
+        api.articleStats(),
       ])
-      setArticles(nextArticles)
       setManagedSources(nextSources)
       setManagedTags(nextTags)
+      setArticleStats(nextStats)
       setApiError('')
     } catch (error) {
       showApiError(error)
-    } finally {
-      setLoading(false)
     }
   }, [showApiError])
 
   const replaceArticle = useCallback((nextArticle: Article) => {
     setArticles((current) => current.map((item) => item.id === nextArticle.id ? nextArticle : item))
+    setLibraryArticles((current) => current.map((item) => item.id === nextArticle.id ? nextArticle : item))
   }, [])
 
   const updateArticleState = useCallback(async (articleId: string, action: ArticleAction) => {
@@ -163,6 +194,7 @@ function App() {
     setMenuOpen(false)
     setOpenTagPickerSourceId(null)
     window.location.hash = '#/'
+    void loadFeed()
   }
 
   const navigateToTags = () => {
@@ -185,9 +217,8 @@ function App() {
     setPending(true)
     try {
       const created = await api.createSource(name, url)
-      const nextArticles = await api.listArticles()
       setManagedSources((current) => [...current, created])
-      setArticles(nextArticles)
+      await Promise.all([loadFeed(), refreshStats()])
       setNewSourceName('')
       setNewSourceUrl('')
       setApiError('')
@@ -205,14 +236,13 @@ function App() {
     setImportingOPML(true)
     try {
       const result = await api.importOPML(opmlFile)
-      const [nextArticles, nextSources, nextTags] = await Promise.all([
-        api.listArticles(),
+      const [nextSources, nextTags] = await Promise.all([
         api.listSources(),
         api.listTags(),
       ])
-      setArticles(nextArticles)
       setManagedSources(nextSources)
       setManagedTags(nextTags)
+      await Promise.all([loadFeed(), refreshStats()])
       setOPMLResult(result)
       setOPMLFile(null)
       if (opmlInput.current) opmlInput.current.value = ''
@@ -251,6 +281,7 @@ function App() {
     try {
       const updated = await api.updateSource(targetSource.id, { enabled: !targetSource.enabled })
       setManagedSources((current) => current.map((item) => item.id === updated.id ? updated : item))
+      await Promise.all([loadFeed(), refreshStats()])
       setApiError('')
     } catch (error) {
       showApiError(error)
@@ -261,9 +292,9 @@ function App() {
     try {
       await api.deleteSource(targetSource.id)
       setManagedSources((current) => current.filter((item) => item.id !== targetSource.id))
-      setArticles((current) => current.filter((item) => item.sourceId !== targetSource.id))
       if (source === targetSource.id) setSource(ALL_SOURCES)
       if (openTagPickerSourceId === targetSource.id) setOpenTagPickerSourceId(null)
+      await Promise.all([loadFeed(), refreshStats()])
       setApiError('')
       showNotice('ニュースソースを削除しました')
     } catch (error) {
@@ -318,8 +349,13 @@ function App() {
         ...item,
         tagIds: item.tagIds.filter((id) => id !== tagId),
       })))
+      setLibraryArticles((current) => current.map((item) => ({
+        ...item,
+        tagIds: item.tagIds.filter((id) => id !== tagId),
+      })))
       if (tag === tagId) setTag(ALL_TAGS)
       if (editingTagId === tagId) setEditingTagId(null)
+      await refreshStats()
       setApiError('')
       showNotice('タグを削除しました')
     } catch (error) {
@@ -337,6 +373,10 @@ function App() {
       setArticles((current) => current.map((item) => (
         item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
       )))
+      setLibraryArticles((current) => current.map((item) => (
+        item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
+      )))
+      await Promise.all([loadFeed(), refreshStats()])
       setApiError('')
     } catch (error) {
       showApiError(error)
@@ -350,14 +390,16 @@ function App() {
       setAnimating(true)
       setDragging(false)
       try {
-        const nextArticle = await api.updateArticleState(currentArticle.id, action)
+        await api.updateArticleState(currentArticle.id, action)
         const direction = action === 'save' ? 1 : -1
         setDragX(direction * Math.max(window.innerWidth * 0.7, 680))
         showNotice(action === 'save' ? 'あとで読むに保存しました' : '既読にしました')
         animationTimer.current = window.setTimeout(() => {
-          replaceArticle(nextArticle)
+          setArticles((current) => current.filter((item) => item.id !== currentArticle.id))
+          setProcessedCount((current) => current + 1)
           setDragX(0)
           setAnimating(false)
+          void refreshStats().catch(showApiError)
         }, 260)
       } catch (error) {
         setDragX(0)
@@ -365,7 +407,7 @@ function App() {
         showApiError(error)
       }
     },
-    [animating, currentArticle, replaceArticle, showApiError, showNotice],
+    [animating, currentArticle, refreshStats, showApiError, showNotice],
   )
 
   const selectTag = (nextTag: TagFilter) => {
@@ -386,26 +428,33 @@ function App() {
     setDragX(0)
   }
 
-  const markArticleRead = useCallback(async (article: Article) => {
+  const markArticleRead = useCallback(async (article: Article, removeFromFeed = false) => {
     if (article.state.read) return
     try {
       await updateArticleState(article.id, 'read')
+      if (removeFromFeed) {
+        setArticles((current) => current.filter((item) => item.id !== article.id))
+        setProcessedCount((current) => current + 1)
+      }
+      await refreshStats()
     } catch (error) {
       showApiError(error)
     }
-  }, [showApiError, updateArticleState])
+  }, [refreshStats, showApiError, updateArticleState])
 
   const openOriginalArticle = useCallback((article: Article) => {
     if (!article.url) return
     window.open(article.url, '_blank', 'noopener,noreferrer')
-    void markArticleRead(article)
+    void markArticleRead(article, true)
   }, [markArticleRead])
 
   const toggleFavorite = async (articleId: string) => {
     const article = articles.find((item) => item.id === articleId)
+      ?? libraryArticles.find((item) => item.id === articleId)
     if (!article) return
     try {
       await updateArticleState(articleId, article.state.favorite ? 'unfavorite' : 'favorite')
+      await refreshStats()
       showNotice(article.state.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました')
     } catch (error) {
       showApiError(error)
@@ -415,6 +464,9 @@ function App() {
   const deleteArticle = async (articleId: string) => {
     try {
       await updateArticleState(articleId, 'delete')
+      setArticles((current) => current.filter((item) => item.id !== articleId))
+      setProcessedCount((current) => current + 1)
+      await refreshStats()
       showNotice('削除記事一覧へ移動しました')
     } catch (error) {
       showApiError(error)
@@ -429,6 +481,9 @@ function App() {
         : 'restore'
     try {
       await updateArticleState(articleId, action)
+      setLibraryArticles((current) => current.filter((item) => item.id !== articleId))
+      setLibraryTotal((current) => Math.max(0, current - 1))
+      await refreshStats()
       showNotice(libraryMode === 'favorite'
         ? 'お気に入りから外しました'
         : libraryMode === 'saved'
@@ -442,7 +497,7 @@ function App() {
   const restoreSkippedArticles = async () => {
     try {
       const result = await api.resetSkipped()
-      setArticles(await api.listArticles())
+      await Promise.all([loadFeed(), refreshStats()])
       setDragX(0)
       setApiError('')
       showNotice(`${result.restored}件のスキップを解除しました`)
@@ -454,6 +509,79 @@ function App() {
   useEffect(() => {
     void loadData()
   }, [loadData])
+
+  useEffect(() => {
+    void loadFeed()
+  }, [loadFeed])
+
+  useEffect(() => {
+    if (loading || prefetching || !nextCursor || articles.length > PREFETCH_THRESHOLD) return
+
+    const requestID = feedRequestID.current
+    const cursor = nextCursor
+    setPrefetching(true)
+    void api.listArticlePage(feedPageQuery(cursor)).then((page) => {
+      if (requestID !== feedRequestID.current) return
+      setArticles((current) => {
+        const existing = new Set(current.map((item) => item.id))
+        return [...current, ...page.items.filter((item) => !existing.has(item.id))]
+      })
+      setNextCursor(page.nextCursor)
+      setApiError('')
+    }).catch((error) => {
+      if (requestID === feedRequestID.current) showApiError(error)
+    }).finally(() => {
+      if (requestID === feedRequestID.current) setPrefetching(false)
+    })
+  }, [articles.length, feedPageQuery, loading, nextCursor, prefetching, showApiError])
+
+  useEffect(() => {
+    if (!libraryMode) {
+      libraryRequestID.current += 1
+      setLibraryArticles([])
+      setLibraryNextCursor(undefined)
+      setLibraryTotal(0)
+      setLibraryLoading(false)
+      return
+    }
+
+    const requestID = ++libraryRequestID.current
+    setLibraryLoading(true)
+    setLibraryArticles([])
+    setLibraryNextCursor(undefined)
+    void api.listArticlePage({ state: libraryMode, limit: LIBRARY_PAGE_SIZE }).then((page) => {
+      if (requestID !== libraryRequestID.current) return
+      setLibraryArticles(page.items)
+      setLibraryNextCursor(page.nextCursor)
+      setLibraryTotal(page.total)
+      setApiError('')
+    }).catch((error) => {
+      if (requestID === libraryRequestID.current) showApiError(error)
+    }).finally(() => {
+      if (requestID === libraryRequestID.current) setLibraryLoading(false)
+    })
+  }, [libraryMode, showApiError])
+
+  const loadMoreLibraryArticles = async () => {
+    if (!libraryMode || !libraryNextCursor || libraryLoading) return
+    const requestID = libraryRequestID.current
+    setLibraryLoading(true)
+    try {
+      const page = await api.listArticlePage({
+        state: libraryMode,
+        cursor: libraryNextCursor,
+        limit: LIBRARY_PAGE_SIZE,
+      })
+      if (requestID !== libraryRequestID.current) return
+      setLibraryArticles((current) => [...current, ...page.items])
+      setLibraryNextCursor(page.nextCursor)
+      setApiError('')
+    } catch (error) {
+      if (requestID === libraryRequestID.current) showApiError(error)
+    } finally {
+      if (requestID === libraryRequestID.current) setLibraryLoading(false)
+    }
+  }
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -531,32 +659,18 @@ function App() {
     }
   }
 
-  const processedCount = selectionArticles.length - filteredArticles.length
-  const progress = selectionArticles.length
-    ? Math.min(100, (processedCount / selectionArticles.length) * 100)
+  const progress = feedTotal
+    ? Math.min(100, (processedCount / feedTotal) * 100)
     : 0
-  const libraryIds = libraryMode === 'favorite'
-    ? favoriteIds
-    : libraryMode === 'saved'
-      ? savedIds
-      : deletedIds
-  const libraryArticles = articles.filter((article) => libraryIds.has(article.id))
-  const remainingTagCount = (targetTag: TagFilter) => articles.filter((article) => {
-    const articleTagIds = article.tagIds
-    const belongsToTag = targetTag === ALL_TAGS
-      || (targetTag === UNTAGGED ? articleTagIds.length === 0 : articleTagIds.includes(targetTag))
-    return belongsToTag
-      && !readIds.has(article.id)
-      && !savedIds.has(article.id)
-      && !deletedIds.has(article.id)
-  }).length
+  const remainingTagCount = (targetTag: TagFilter) => targetTag === ALL_TAGS
+    ? articleStats.feed
+    : targetTag === UNTAGGED
+      ? articleStats.untaggedFeed
+      : articleStats.tagFeedCounts[targetTag] ?? 0
 
-  const remainingSourceCount = (targetSource: string) => articles.filter((article) => (
-    (targetSource === ALL_SOURCES || article.sourceId === targetSource)
-      && !readIds.has(article.id)
-      && !savedIds.has(article.id)
-      && !deletedIds.has(article.id)
-  )).length
+  const remainingSourceCount = (targetSource: string) => targetSource === ALL_SOURCES
+    ? articleStats.feed
+    : articleStats.sourceFeedCounts[targetSource] ?? 0
 
   const activeFilterName = filterMode === 'source'
     ? sourceOptions.find((item) => item.id === source)?.name
@@ -574,7 +688,7 @@ function App() {
           <span className="live-dot" />
           <span>{loading ? 'API接続中' : apiError ? 'APIエラー' : 'API接続済み'}</span>
           <span className="status-divider" />
-          <span>{articles.length} stories</span>
+          <span>{feedTotal} stories</span>
         </div>
 
         <div className="header-menu">
@@ -606,17 +720,17 @@ function App() {
                 <button className={libraryMode === 'favorite' ? 'is-active' : ''} onClick={() => navigateToLibrary('favorite')} type="button">
                   <Icon name="star" size={19} />
                   <span>お気に入り</span>
-                  <strong>{favoriteIds.size}</strong>
+                  <strong>{articleStats.favorite}</strong>
                 </button>
                 <button className={libraryMode === 'saved' ? 'is-active' : ''} onClick={() => navigateToLibrary('saved')} type="button">
                   <Icon name="bookmark" size={19} />
                   <span>あとで見る</span>
-                  <strong>{savedIds.size}</strong>
+                  <strong>{articleStats.saved}</strong>
                 </button>
                 <button className={libraryMode === 'deleted' ? 'is-active' : ''} onClick={() => navigateToLibrary('deleted')} type="button">
                   <Icon name="trash" size={19} />
                   <span>ゴミ箱</span>
-                  <strong>{deletedIds.size}</strong>
+                  <strong>{articleStats.deleted}</strong>
                 </button>
               </nav>
             </>
@@ -627,7 +741,7 @@ function App() {
       {apiError && (
         <div className="api-error" role="alert">
           <span>{apiError}</span>
-          <button onClick={() => void loadData()} type="button">再試行</button>
+          <button onClick={() => void Promise.all([loadData(), loadFeed()])} type="button">再試行</button>
         </div>
       )}
 
@@ -864,13 +978,13 @@ function App() {
           </div>
           <div className="library-tabs" role="tablist" aria-label="記事の状態">
             <button className={libraryMode === 'favorite' ? 'is-active' : ''} onClick={() => navigateToLibrary('favorite')} type="button">
-              お気に入り <span>{favoriteIds.size}</span>
+              お気に入り <span>{articleStats.favorite}</span>
             </button>
             <button className={libraryMode === 'saved' ? 'is-active' : ''} onClick={() => navigateToLibrary('saved')} type="button">
-              あとで見る <span>{savedIds.size}</span>
+              あとで見る <span>{articleStats.saved}</span>
             </button>
             <button className={libraryMode === 'deleted' ? 'is-active' : ''} onClick={() => navigateToLibrary('deleted')} type="button">
-              ゴミ箱 <span>{deletedIds.size}</span>
+              ゴミ箱 <span>{articleStats.deleted}</span>
             </button>
           </div>
           <div className="library-list">
@@ -881,7 +995,7 @@ function App() {
                   <a
                     className="library-article-title"
                     href={article.url}
-                    onClick={() => void markArticleRead(article)}
+                    onClick={() => void markArticleRead(article, false)}
                     rel="noreferrer"
                     target="_blank"
                   >
@@ -899,7 +1013,18 @@ function App() {
                 </button>
               </article>
             ))}
-            {!libraryArticles.length && <div className="library-empty">該当する記事はありません.</div>}
+            {libraryLoading && !libraryArticles.length && <div className="library-empty">記事を取得しています.</div>}
+            {!libraryLoading && !libraryArticles.length && <div className="library-empty">該当する記事はありません.</div>}
+            {libraryNextCursor && (
+              <button
+                className="library-load-more"
+                disabled={libraryLoading}
+                onClick={() => void loadMoreLibraryArticles()}
+                type="button"
+              >
+                {libraryLoading ? '取得中' : `さらに表示 (${libraryArticles.length} / ${libraryTotal})`}
+              </button>
+            )}
           </div>
         </main>
       ) : (
@@ -979,15 +1104,15 @@ function App() {
             <span>{filterMode === 'source' ? 'ニュースソース' : 'タグ'} · {activeFilterName ?? 'すべて'}</span>
             <div className="progress-count">
               <strong>
-                {String(currentArticle ? processedCount + 1 : selectionArticles.length).padStart(2, '0')}
+                {String(currentArticle ? processedCount + 1 : feedTotal).padStart(2, '0')}
               </strong>
-              <span>/ {String(selectionArticles.length).padStart(2, '0')}</span>
+              <span>/ {String(feedTotal).padStart(2, '0')}</span>
             </div>
           </div>
 
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
 
-          <div className="card-stage">
+          <div className={`card-stage ${animating ? 'is-advancing' : ''}`}>
             {loading ? (
               <div className="queue-complete">
                 <p className="eyebrow">CONNECTING</p>
@@ -999,12 +1124,13 @@ function App() {
                 <div className="stack-card stack-card--middle" />
                 <ArticleCard
                   article={currentArticle}
+                  key={currentArticle.id}
                   tagLabels={tagNamesForSource(currentArticle.sourceId)}
                   dragX={dragX}
                   dragging={dragging}
-                  isFavorite={favoriteIds.has(currentArticle.id)}
+                  isFavorite={currentArticle.state.favorite}
                   onDelete={() => deleteArticle(currentArticle.id)}
-                  onVisit={() => void markArticleRead(currentArticle)}
+                  onVisit={() => void markArticleRead(currentArticle, true)}
                   onToggleFavorite={() => toggleFavorite(currentArticle.id)}
                   onPointerCancel={handlePointerCancel}
                   onPointerDown={handlePointerDown}
@@ -1017,7 +1143,7 @@ function App() {
                 <div className="complete-mark"><Icon name="check" size={34} /></div>
                 <p className="eyebrow">YOU ARE ALL CAUGHT UP</p>
                 <h2>表示できる未読記事はありません</h2>
-                {skippedIds.size > 0 && (
+                {articleStats.skipped > 0 && (
                   <button type="button" onClick={restoreSkippedArticles}>
                     <Icon name="refresh" size={18} /> スキップ解除
                   </button>

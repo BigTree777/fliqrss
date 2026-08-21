@@ -36,6 +36,23 @@ export type ArticleAction =
   | 'delete'
   | 'restore'
 
+export interface ArticlePage {
+  items: Article[]
+  nextCursor?: string
+  total: number
+}
+
+export interface ArticleStats {
+  feed: number
+  favorite: number
+  saved: number
+  deleted: number
+  skipped: number
+  untaggedFeed: number
+  sourceFeedCounts: Record<string, number>
+  tagFeedCounts: Record<string, number>
+}
+
 export interface Source {
   id: string
   name: string

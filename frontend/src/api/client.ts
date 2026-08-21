@@ -1,4 +1,4 @@
-import type { Article, ArticleAction, Source, Tag } from '../types/article'
+import type { Article, ArticleAction, ArticlePage, ArticleStats, Source, Tag } from '../types/article'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '')
 
@@ -60,8 +60,29 @@ export interface OPMLImportResult {
   tagsCreated: number
 }
 
+export interface ArticlePageQuery {
+  state?: 'feed' | 'favorite' | 'saved' | 'deleted' | 'read' | 'all'
+  sourceId?: string
+  tagId?: string
+  untagged?: boolean
+  cursor?: string
+  limit?: number
+}
+
+function articlePagePath(query: ArticlePageQuery): string {
+  const parameters = new URLSearchParams()
+  parameters.set('state', query.state ?? 'feed')
+  parameters.set('limit', String(query.limit ?? 20))
+  if (query.sourceId) parameters.set('sourceId', query.sourceId)
+  if (query.tagId) parameters.set('tagId', query.tagId)
+  if (query.untagged) parameters.set('untagged', 'true')
+  if (query.cursor) parameters.set('cursor', query.cursor)
+  return `/articles/page?${parameters.toString()}`
+}
+
 export const api = {
-  listArticles: () => request<Article[]>('/articles?state=all'),
+  listArticlePage: (query: ArticlePageQuery) => request<ArticlePage>(articlePagePath(query)),
+  articleStats: () => request<ArticleStats>('/articles/stats'),
   updateArticleState: (id: string, action: ArticleAction) => request<Article>(`/articles/${encodeURIComponent(id)}/state`, {
     method: 'PATCH',
     body: JSON.stringify({ action }),
