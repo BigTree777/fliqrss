@@ -188,6 +188,10 @@ func resolveLink(baseURL, rawLink string) string {
 }
 
 func cleanText(value string) string {
+	return cleanTextDepth(value, 0)
+}
+
+func cleanTextDepth(value string, depth int) string {
 	value = strings.TrimSpace(html.UnescapeString(value))
 	if value == "" {
 		return ""
@@ -215,6 +219,9 @@ func cleanText(value string) string {
 		}
 	}
 	if cleaned := strings.Join(strings.Fields(builder.String()), " "); validXML && cleaned != "" {
+		if depth < 3 && cleaned != value && strings.Contains(cleaned, "<") {
+			return cleanTextDepth(cleaned, depth+1)
+		}
 		return spaceBeforePunctuation.ReplaceAllString(cleaned, "$1")
 	}
 	cleaned := strings.Join(strings.Fields(html.UnescapeString(tagPattern.ReplaceAllString(value, " "))), " ")

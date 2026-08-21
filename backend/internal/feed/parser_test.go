@@ -70,6 +70,27 @@ func TestParseAtom(t *testing.T) {
 	}
 }
 
+func TestParseAtomCDATAHTML(t *testing.T) {
+	data := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>CDATA Atom</title>
+  <entry>
+    <title>CDATA article</title>
+    <id>atom-cdata-1</id>
+    <link href="https://example.com/posts/1" />
+    <summary type="html"><![CDATA[<p><img src="image.webp" alt="Thumbnail" /></p><p>Full <strong>summary</strong>.</p>]]></summary>
+  </entry>
+</feed>`)
+
+	document, err := Parse(data, "https://example.com/atom.xml")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(document.Entries) != 1 || document.Entries[0].Summary != "Full summary." {
+		t.Fatalf("entry = %+v", document.Entries)
+	}
+}
+
 func TestUnsupportedFormat(t *testing.T) {
 	_, err := Parse([]byte(`<html><body>Not a feed</body></html>`), "https://example.com")
 	if !errors.Is(err, ErrUnsupportedFormat) {
