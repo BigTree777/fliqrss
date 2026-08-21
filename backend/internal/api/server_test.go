@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/model"
+	"fliqrss/backend/internal/opml"
 	"fliqrss/backend/internal/store"
 )
 
 func TestArticleWorkflow(t *testing.T) {
-	server := NewServer(store.NewMemory(), "http://localhost:5173")
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "http://localhost:5173")
 
 	response := performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles", nil)
 	if response.Code != http.StatusOK {
@@ -57,7 +60,8 @@ func TestArticleWorkflow(t *testing.T) {
 }
 
 func TestArticleFiltersAndActions(t *testing.T) {
-	server := NewServer(store.NewMemory(), "")
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
 
 	response := performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/future-interface/state", map[string]string{"action": "save"})
 	if response.Code != http.StatusOK {
@@ -75,7 +79,7 @@ func TestArticleFiltersAndActions(t *testing.T) {
 		t.Fatalf("saved articles = %+v, want future-interface", articles)
 	}
 
-	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles?tagId=business&state=all", nil)
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles?tagId="+fixture.tags["business"]+"&state=all", nil)
 	articles = decodeData[[]model.Article](t, response)
 	if len(articles) != 2 {
 		t.Fatalf("business article count = %d, want 2", len(articles))
@@ -88,7 +92,8 @@ func TestArticleFiltersAndActions(t *testing.T) {
 }
 
 func TestSourceAndTagWorkflow(t *testing.T) {
-	server := NewServer(store.NewMemory(), "")
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
 
 	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/tags", map[string]string{"name": "デザイン"})
 	if response.Code != http.StatusCreated {
@@ -96,7 +101,7 @@ func TestSourceAndTagWorkflow(t *testing.T) {
 	}
 	tag := decodeData[model.Tag](t, response)
 
-	response = performRequest(t, server.Handler(), http.MethodPut, "/api/v1/sources/orbit-journal/tags", map[string][]string{"tagIds": {tag.ID}})
+	response = performRequest(t, server.Handler(), http.MethodPut, "/api/v1/sources/"+fixture.sources["orbit"]+"/tags", map[string][]string{"tagIds": {tag.ID}})
 	if response.Code != http.StatusOK {
 		t.Fatalf("set source tags status = %d, want %d", response.Code, http.StatusOK)
 	}
@@ -119,16 +124,17 @@ func TestSourceAndTagWorkflow(t *testing.T) {
 	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/sources", nil)
 	sources := decodeData[[]model.Source](t, response)
 	for _, candidate := range sources {
-		if candidate.ID == "orbit-journal" && len(candidate.TagIDs) != 0 {
+		if candidate.ID == fixture.sources["orbit"] && len(candidate.TagIDs) != 0 {
 			t.Fatalf("deleted tag remains assigned: %v", candidate.TagIDs)
 		}
 	}
 }
 
 func TestDeletingSourceRemovesItsArticles(t *testing.T) {
-	server := NewServer(store.NewMemory(), "")
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
 
-	response := performRequest(t, server.Handler(), http.MethodDelete, "/api/v1/sources/orbit-journal", nil)
+	response := performRequest(t, server.Handler(), http.MethodDelete, "/api/v1/sources/"+fixture.sources["orbit"], nil)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete source status = %d, want %d", response.Code, http.StatusNoContent)
 	}
@@ -139,7 +145,7 @@ func TestDeletingSourceRemovesItsArticles(t *testing.T) {
 		t.Fatalf("article count after source deletion = %d, want 5", len(articles))
 	}
 	for _, article := range articles {
-		if article.SourceID == "orbit-journal" {
+		if article.SourceID == fixture.sources["orbit"] {
 			t.Fatalf("article from deleted source remains: %s", article.ID)
 		}
 	}
@@ -186,14 +192,14 @@ func TestCreateSourceValidationAndConflict(t *testing.T) {
 }
 
 func TestRefreshSource(t *testing.T) {
-	memory := store.NewMemory()
+	fixture := newTestFixture(t)
 	loader := staticFeedLoader{document: feed.Document{
 		Format:  "atom",
 		Entries: []feed.Entry{{ID: "entry-1", Title: "Refreshed article", Summary: "Summary"}},
 	}}
-	server := NewServerWithFeedLoader(memory, "", loader)
+	server := NewServerWithFeedLoader(fixture.memory, "", loader)
 
-	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/orbit-journal/refresh", nil)
+	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/"+fixture.sources["orbit"]+"/refresh", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("refresh status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
@@ -210,7 +216,7 @@ func TestRefreshSource(t *testing.T) {
 		t.Fatalf("refresh response = %+v", envelope.Data)
 	}
 
-	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/orbit-journal/refresh", nil)
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/"+fixture.sources["orbit"]+"/refresh", nil)
 	var second struct {
 		Data struct {
 			AddedArticles int `json:"addedArticles"`
@@ -222,6 +228,80 @@ func TestRefreshSource(t *testing.T) {
 	if second.Data.AddedArticles != 0 {
 		t.Fatalf("second refresh added = %d, want 0", second.Data.AddedArticles)
 	}
+}
+
+func TestImportOPML(t *testing.T) {
+	loader := staticFeedLoader{document: feed.Document{
+		Format:  "rss",
+		Title:   "Imported feed",
+		Entries: []feed.Entry{{ID: "entry-1", Title: "Imported article", Summary: "Summary"}},
+	}}
+	fixture := newTestFixture(t)
+	server := NewServerWithFeedLoader(fixture.memory, "", loader)
+	document := `<opml version="2.0"><body>
+<outline text="Technology"><outline text="Japanese">
+  <outline text="New feed" xmlUrl="https://news.example.test/feed.xml"/>
+</outline></outline>
+<outline text="Duplicate" xmlUrl="https://example.com/orbit/rss.xml"/>
+<outline text="Invalid" xmlUrl="file:///etc/passwd"/>
+</body></opml>`
+
+	response := performMultipartRequest(t, server.Handler(), "/api/v1/sources/import-opml", "subscriptions.opml", document)
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	result := decodeData[opmlImportResult](t, response)
+	if result.Total != 3 || result.Added != 1 || result.Duplicates != 1 || result.Failed != 1 || result.TagsCreated != 1 {
+		t.Fatalf("import result = %+v", result)
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/sources", nil)
+	sources := decodeData[[]model.Source](t, response)
+	var imported model.Source
+	for _, source := range sources {
+		if source.URL == "https://news.example.test/feed.xml" {
+			imported = source
+		}
+	}
+	if imported.ID == "" || len(imported.TagIDs) != 2 || imported.ArticleCount != 1 {
+		t.Fatalf("imported source = %+v", imported)
+	}
+}
+
+func TestImportOPMLRejectsInvalidDocument(t *testing.T) {
+	server := NewServer(store.NewMemory(), "")
+	response := performMultipartRequest(t, server.Handler(), "/api/v1/sources/import-opml", "invalid.opml", `<rss/>`)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("import status = %d, want %d", response.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestExportOPML(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
+	response := performRequest(t, server.Handler(), http.MethodGet, "/api/v1/sources/export-opml", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("export status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename="fliqrss-subscriptions.opml"` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	subscriptions, err := opml.Parse(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subscriptions) != 6 {
+		t.Fatalf("exported subscriptions = %d, want 6", len(subscriptions))
+	}
+	for _, subscription := range subscriptions {
+		if subscription.XMLURL == "https://example.com/orbit/rss.xml" {
+			if len(subscription.Tags) != 2 || subscription.Tags[0] != "Technology" || subscription.Tags[1] != "Science" {
+				t.Fatalf("exported tags = %v", subscription.Tags)
+			}
+			return
+		}
+	}
+	t.Fatal("Orbit Journal was not exported")
 }
 
 func TestCORS(t *testing.T) {
@@ -236,6 +316,67 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+type testFixture struct {
+	memory  *store.Memory
+	sources map[string]string
+	tags    map[string]string
+}
+
+func newTestFixture(t *testing.T) testFixture {
+	t.Helper()
+	memory := store.NewMemory()
+	tagNames := map[string]string{
+		"technology": "Technology",
+		"business":   "Business",
+		"culture":    "Culture",
+		"science":    "Science",
+	}
+	tagIDs := make(map[string]string, len(tagNames))
+	for key, name := range tagNames {
+		tag, err := memory.CreateTag(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tagIDs[key] = tag.ID
+	}
+
+	sourceSpecs := []struct {
+		key, name, url, format, articleID string
+		tagKeys                           []string
+	}{
+		{key: "orbit", name: "Orbit Journal", url: "https://example.com/orbit/rss.xml", format: "rss", articleID: "future-interface", tagKeys: []string{"technology", "science"}},
+		{key: "business", name: "Business Field", url: "https://example.com/business/atom.xml", format: "atom", articleID: "small-city-business", tagKeys: []string{"business"}},
+		{key: "nook", name: "Nook Magazine", url: "https://example.com/nook/feed.xml", format: "rss", articleID: "night-museum", tagKeys: []string{"culture"}},
+		{key: "scope", name: "Scope Science", url: "https://example.com/scope/atom.xml", format: "atom", articleID: "deep-sea-sound", tagKeys: []string{"science", "technology"}},
+		{key: "ledger", name: "Common Ledger", url: "https://example.com/ledger/rss.xml", format: "rss", articleID: "repair-economy", tagKeys: []string{"business", "culture"}},
+		{key: "current", name: "Open Current", url: "https://example.com/current/feed.xml", format: "rss", articleID: "open-source-garden", tagKeys: []string{"technology", "science"}},
+	}
+	sourceIDs := make(map[string]string, len(sourceSpecs))
+	for _, spec := range sourceSpecs {
+		source, err := memory.CreateSource(spec.name, spec.url, spec.format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tags := make([]string, 0, len(spec.tagKeys))
+		for _, key := range spec.tagKeys {
+			tags = append(tags, tagIDs[key])
+		}
+		if _, err := memory.SetSourceTags(source.ID, tags); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = memory.UpsertArticles(source.ID, spec.format, []model.Article{{
+			ID: spec.articleID, Title: spec.name + " article", Summary: "Summary",
+			PublishedAt: "2026-08-21T00:00:00Z", ReadTime: 1, SourceInitials: "TS",
+			VisualLabel: "TEST", VisualTheme: "cobalt",
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs[spec.key] = source.ID
+	}
+	return testFixture{memory: memory, sources: sourceIDs, tags: tagIDs}
+}
+
 func performRequest(t *testing.T, handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var encoded bytes.Buffer
@@ -248,6 +389,27 @@ func performRequest(t *testing.T, handler http.Handler, method, path string, bod
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func performMultipartRequest(t *testing.T, handler http.Handler, path, filename, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, path, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

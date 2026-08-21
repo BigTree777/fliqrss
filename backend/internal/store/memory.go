@@ -29,13 +29,11 @@ type Memory struct {
 }
 
 func NewMemory() *Memory {
-	s := &Memory{
+	return &Memory{
 		articles: make(map[string]model.Article),
 		sources:  make(map[string]model.Source),
 		tags:     make(map[string]model.Tag),
 	}
-	s.seed()
-	return s
 }
 
 func (s *Memory) ListArticles(filter model.ArticleFilter) []model.Article {
@@ -109,32 +107,11 @@ func (s *Memory) ApplyArticleAction(id string, action model.ArticleAction) (mode
 		return model.Article{}, ErrNotFound
 	}
 
-	switch action {
-	case model.ActionRead:
-		article.State.Read = true
-		article.State.Skipped = false
-	case model.ActionUnread:
-		article.State.Read = false
-		article.State.Skipped = false
-	case model.ActionSkip:
-		article.State.Read = true
-		article.State.Skipped = true
-	case model.ActionSave:
-		article.State.Saved = true
-	case model.ActionUnsave:
-		article.State.Saved = false
-	case model.ActionFavorite:
-		article.State.Favorite = true
-	case model.ActionUnfavorite:
-		article.State.Favorite = false
-	case model.ActionDelete:
-		article.State.Deleted = true
-		article.State.Favorite = false
-	case model.ActionRestore:
-		article.State.Deleted = false
-	default:
-		return model.Article{}, ErrBadAction
+	state, err := applyArticleAction(article.State, action)
+	if err != nil {
+		return model.Article{}, err
 	}
+	article.State = state
 
 	s.articles[id] = article
 	if source, ok := s.sources[article.SourceID]; ok {
@@ -144,7 +121,37 @@ func (s *Memory) ApplyArticleAction(id string, action model.ArticleAction) (mode
 	return article, nil
 }
 
-func (s *Memory) ResetSkipped() int {
+func applyArticleAction(state model.ArticleState, action model.ArticleAction) (model.ArticleState, error) {
+	switch action {
+	case model.ActionRead:
+		state.Read = true
+		state.Skipped = false
+	case model.ActionUnread:
+		state.Read = false
+		state.Skipped = false
+	case model.ActionSkip:
+		state.Read = true
+		state.Skipped = true
+	case model.ActionSave:
+		state.Saved = true
+	case model.ActionUnsave:
+		state.Saved = false
+	case model.ActionFavorite:
+		state.Favorite = true
+	case model.ActionUnfavorite:
+		state.Favorite = false
+	case model.ActionDelete:
+		state.Deleted = true
+		state.Favorite = false
+	case model.ActionRestore:
+		state.Deleted = false
+	default:
+		return model.ArticleState{}, ErrBadAction
+	}
+	return state, nil
+}
+
+func (s *Memory) ResetSkipped() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -158,7 +165,7 @@ func (s *Memory) ResetSkipped() int {
 		s.articles[id] = article
 		count++
 	}
-	return count
+	return count, nil
 }
 
 func (s *Memory) ListSources() []model.Source {
@@ -221,6 +228,10 @@ func (s *Memory) CreateSource(name, rawURL, format string) (model.Source, error)
 }
 
 func (s *Memory) UpsertArticles(sourceID, format string, articles []model.Article) (model.Source, int, error) {
+	return s.upsertArticlesAt(sourceID, format, articles, time.Now().UTC())
+}
+
+func (s *Memory) upsertArticlesAt(sourceID, format string, articles []model.Article, fetchedAt time.Time) (model.Source, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -241,7 +252,6 @@ func (s *Memory) UpsertArticles(sourceID, format string, articles []model.Articl
 		s.articleOrder = append(s.articleOrder, article.ID)
 		added++
 	}
-	fetchedAt := time.Now().UTC()
 	source.Format = format
 	source.LastFetchedAt = &fetchedAt
 	source.ArticleCount = 0
@@ -344,6 +354,21 @@ func (s *Memory) CreateTag(name string) (model.Tag, error) {
 	return tag, nil
 }
 
+func (s *Memory) FindOrCreateTag(name string) (model.Tag, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, tag := range s.tags {
+		if strings.EqualFold(tag.Name, name) {
+			return tag, false, nil
+		}
+	}
+	tag := model.Tag{ID: newID("tag"), Name: name, CreatedAt: time.Now().UTC()}
+	s.tags[tag.ID] = tag
+	s.tagOrder = append(s.tagOrder, tag.ID)
+	return tag, true, nil
+}
+
 func (s *Memory) UpdateTag(id, name string) (model.Tag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -378,6 +403,71 @@ func (s *Memory) DeleteTag(id string) error {
 	return nil
 }
 
+func (s *Memory) insertSource(source model.Source) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source.TagIDs = slices.Clone(source.TagIDs)
+	if _, exists := s.sources[source.ID]; !exists {
+		s.sourceOrder = append(s.sourceOrder, source.ID)
+	}
+	s.sources[source.ID] = source
+}
+
+func (s *Memory) insertTag(tag model.Tag) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.tags[tag.ID]; !exists {
+		s.tagOrder = append(s.tagOrder, tag.ID)
+	}
+	s.tags[tag.ID] = tag
+}
+
+func (s *Memory) hasTag(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.tags[id]
+	return ok
+}
+
+func (s *Memory) findTagByName(name string) (model.Tag, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, tag := range s.tags {
+		if strings.EqualFold(tag.Name, name) {
+			return tag, true
+		}
+	}
+	return model.Tag{}, false
+}
+
+func (s *Memory) replace(tags []model.Tag, sources []model.Source, articles []model.Article) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.articles = make(map[string]model.Article, len(articles))
+	s.articleOrder = make([]string, 0, len(articles))
+	for _, article := range articles {
+		article.Body = slices.Clone(article.Body)
+		s.articles[article.ID] = article
+		s.articleOrder = append(s.articleOrder, article.ID)
+	}
+
+	s.sources = make(map[string]model.Source, len(sources))
+	s.sourceOrder = make([]string, 0, len(sources))
+	for _, source := range sources {
+		source.TagIDs = slices.Clone(source.TagIDs)
+		s.sources[source.ID] = source
+		s.sourceOrder = append(s.sourceOrder, source.ID)
+	}
+
+	s.tags = make(map[string]model.Tag, len(tags))
+	s.tagOrder = make([]string, 0, len(tags))
+	for _, tag := range tags {
+		s.tags[tag.ID] = tag
+		s.tagOrder = append(s.tagOrder, tag.ID)
+	}
+}
+
 func newID(prefix string) string {
 	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {
@@ -386,94 +476,4 @@ func newID(prefix string) string {
 	return prefix + "-" + hex.EncodeToString(bytes)
 }
 
-func (s *Memory) seed() {
-	now := time.Now().UTC()
-	tags := []model.Tag{
-		{ID: "technology", Name: "テクノロジー", CreatedAt: now},
-		{ID: "business", Name: "ビジネス", CreatedAt: now},
-		{ID: "culture", Name: "カルチャー", CreatedAt: now},
-		{ID: "science", Name: "サイエンス", CreatedAt: now},
-	}
-	for _, tag := range tags {
-		s.tags[tag.ID] = tag
-		s.tagOrder = append(s.tagOrder, tag.ID)
-	}
-
-	sources := []model.Source{
-		{ID: "orbit-journal", Name: "Orbit Journal", URL: "https://example.com/orbit/rss.xml", Format: "rss", Enabled: true, TagIDs: []string{"technology", "science"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-		{ID: "business-field", Name: "Business Field", URL: "https://example.com/business/atom.xml", Format: "atom", Enabled: true, TagIDs: []string{"business"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-		{ID: "nook-magazine", Name: "Nook Magazine", URL: "https://example.com/nook/feed.xml", Format: "rss", Enabled: true, TagIDs: []string{"culture"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-		{ID: "scope-science", Name: "Scope Science", URL: "https://example.com/scope/atom.xml", Format: "atom", Enabled: true, TagIDs: []string{"science", "technology"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-		{ID: "common-ledger", Name: "Common Ledger", URL: "https://example.com/ledger/rss.xml", Format: "rss", Enabled: true, TagIDs: []string{"business", "culture"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-		{ID: "open-current", Name: "Open Current", URL: "https://example.com/current/feed.xml", Format: "rss", Enabled: true, TagIDs: []string{"technology", "science"}, ArticleCount: 1, LastFetchedAt: &now, CreatedAt: now},
-	}
-	for _, source := range sources {
-		s.sources[source.ID] = source
-		s.sourceOrder = append(s.sourceOrder, source.ID)
-	}
-
-	articles := seedArticles()
-	for _, article := range articles {
-		s.articles[article.ID] = article
-		s.articleOrder = append(s.articleOrder, article.ID)
-	}
-}
-
-func seedArticles() []model.Article {
-	return []model.Article{
-		{
-			ID: "future-interface", SourceID: "orbit-journal", Source: "Orbit Journal", SourceInitials: "OJ",
-			PublishedAt: "12分前", ReadTime: 4, Title: "画面のないコンピューターが, 暮らしの輪郭を変えはじめた",
-			Summary: "身につけるAIデバイスと音声インターフェース. 次のコンピューティング体験をつくる小さな変化を追う.",
-			Body: []string{
-				"スマートフォンを取り出さずに情報へ触れる体験が, 少しずつ日常へ入りはじめています. 音声と小型センサーを組み合わせたデバイスは, 必要な瞬間だけ静かに情報を差し出します.",
-				"重要なのは画面が消えることではなく, 人と情報の距離が変わることです. 通知を増やすのではなく, 本当に必要な情報を選ぶ設計が求められています.",
-			}, VisualLabel: "NEW INTERFACE", VisualTheme: "cobalt",
-		},
-		{
-			ID: "small-city-business", SourceID: "business-field", Source: "Business Field", SourceInitials: "BF",
-			PublishedAt: "28分前", ReadTime: 6, Title: "小さな都市から生まれる, 新しい働き方のネットワーク",
-			Summary: "場所よりも関係性を選ぶチームが増えている. 地域に根ざしながら世界と働く人々の現在地.",
-			Body: []string{
-				"都市への集中を前提にしないチームづくりが広がっています. 小さな拠点を行き来しながら, 得意分野の異なる人がプロジェクトごとに集まります.",
-				"オンラインだけでは生まれにくい偶然の会話を残しながら, 移動の負担を減らす. その両立が新しい組織設計の焦点です.",
-			}, VisualLabel: "LOCAL / GLOBAL", VisualTheme: "coral",
-		},
-		{
-			ID: "night-museum", SourceID: "nook-magazine", Source: "Nook Magazine", SourceInitials: "NM",
-			PublishedAt: "1時間前", ReadTime: 3, Title: "夜のミュージアムで出会う, もうひとつの街の表情",
-			Summary: "閉館時間を越えて開かれる展示と対話. 静かな夜に文化施設が担う役割を考える.",
-			Body: []string{
-				"日中とは違う速度で作品と向き合える夜間開館が注目されています. 仕事帰りの人や, 混雑を避けたい人にとって新しい居場所になっています.",
-				"展示を見るだけでなく, 小さな対話や音楽が同じ空間に重なることで, 街の文化は少しだけ身近なものになります.",
-			}, VisualLabel: "AFTER HOURS", VisualTheme: "violet",
-		},
-		{
-			ID: "deep-sea-sound", SourceID: "scope-science", Source: "Scope Science", SourceInitials: "SS",
-			PublishedAt: "2時間前", ReadTime: 5, Title: "深海の音から読み解く, 目に見えない生態系の変化",
-			Summary: "水中マイクが捉えた長期データから, 海の季節と生き物の移動が見えてきた.",
-			Body: []string{
-				"光の届かない海では, 音が環境を知る大切な手がかりになります. 研究チームは長期間の録音から, 生き物の移動や人間活動の影響を分析しています.",
-				"同じ場所の音を継続して比べることで, 一度の調査では見えない小さな変化を捉えられるようになりました.",
-			}, VisualLabel: "BELOW 2,000M", VisualTheme: "aqua",
-		},
-		{
-			ID: "repair-economy", SourceID: "common-ledger", Source: "Common Ledger", SourceInitials: "CL",
-			PublishedAt: "3時間前", ReadTime: 7, Title: "「直して使う」がつくる, 小さくて強い地域経済",
-			Summary: "修理する技術と場所を共有するリペアカフェ. モノを長く使うことから生まれる新しい循環.",
-			Body: []string{
-				"壊れた家電や衣服を持ち寄り, 修理の知識を共有する場所が増えています. 費用を抑えるだけでなく, 技術や道具を地域で受け継ぐ役割もあります.",
-				"大量に買い替える経済から, 手入れしながら使う経済へ. 小さな活動が地域の新しいつながりを育てています.",
-			}, VisualLabel: "REPAIR / REUSE", VisualTheme: "amber",
-		},
-		{
-			ID: "open-source-garden", SourceID: "open-current", Source: "Open Current", SourceInitials: "OC",
-			PublishedAt: "5時間前", ReadTime: 4, Title: "オープンソースで育てる, 都市の小さな菜園",
-			Summary: "センサーと共有設計図を使って, 誰でも参加できる都市農園をつくる試み.",
-			Body: []string{
-				"土の水分や日照を測る小さなセンサーを, 誰でも組み立てられる設計図として公開する活動が始まっています.",
-				"技術は収穫量を競うためだけではありません. 初めて参加する人が植物の変化に気づき, 地域の経験を共有するきっかけにもなっています.",
-			}, VisualLabel: "OPEN GARDEN", VisualTheme: "forest",
-		},
-	}
-}
+var _ Repository = (*Memory)(nil)

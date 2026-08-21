@@ -2,27 +2,45 @@
 
 Go標準ライブラリだけで動作するfliqrssのREST APIである.
 RSS 2.0とAtom 1.0のフィード登録, 形式の自動判定, 記事取込に対応する.
-現在はフロントエンド接続前のため, データをインメモリへ保存する.
-サーバーを再起動すると記事状態, 追加したソース, タグは初期状態へ戻る.
+PostgreSQLへ記事, ソース, タグ, 閲覧状態を保存する.
+初期状態は空であり, ダミーの記事, ソース, タグは登録しない.
 
 ## 起動
 
+リポジトリのルートでDocker Composeを起動する.
+
 ```bash
-go run ./cmd/server
+cp .env.example .env
+docker compose up --build
 ```
+
+PostgreSQLのスキーマはバックエンド起動時に自動作成する.
+データは`postgres-data`名前付きボリュームへ保存されるため, コンテナを再作成しても維持される.
 
 標準では`http://localhost:8080`で待ち受ける.
 Viteからのアクセスを許可するオリジンは`http://localhost:5173`である.
-設定を変更する場合は環境変数を指定する.
+Goを直接起動する場合は, PostgreSQLの接続先を環境変数で指定する.
 
 ```bash
-ADDR=:8081 CORS_ORIGIN=http://localhost:5174 go run ./cmd/server
+DATABASE_URL='postgres://fliqrss:fliqrss-dev@localhost:5432/fliqrss?sslmode=disable' go run ./cmd/server
 ```
+
+`DATABASE_URL`を指定しない場合は, 開発とテスト用のインメモリ保存で起動する.
+この場合のデータは再起動時に消える.
 
 ## テスト
 
+インメモリストアを使用する通常テストは, Goを直接実行できる環境で起動する.
+
 ```bash
 go test ./...
+```
+
+PostgreSQLへの保存と再読込を含む全テストは, リポジトリのルートからDocker Composeで起動する.
+テストごとに一時スキーマを作成するため, 開発用データには影響しない.
+
+```bash
+docker compose --profile test run --rm backend-test
 ```
 
 ## レスポンス形式
@@ -55,6 +73,8 @@ go test ./...
 | POST | `/api/v1/articles/reset-skipped` | スキップ由来の既読を解除 |
 | GET | `/api/v1/sources` | ソース一覧 |
 | POST | `/api/v1/sources` | ソース追加 |
+| POST | `/api/v1/sources/import-opml` | OPMLからソースを一括追加 |
+| GET | `/api/v1/sources/export-opml` | ソースとタグをOPMLとして出力 |
 | PATCH | `/api/v1/sources/{id}` | ソース名または取得状態の変更 |
 | DELETE | `/api/v1/sources/{id}` | ソース削除 |
 | POST | `/api/v1/sources/{id}/refresh` | ソースを再取得 |
@@ -99,6 +119,35 @@ curl -X POST \
 curl -X POST http://localhost:8080/api/v1/sources/{id}/refresh
 ```
 
+## OPMLの取込
+
+OPML 1.0または2.0の`outline`要素から`xmlUrl`を読み取り, ニュースソースを一括追加する.
+フォルダーとして使用されている親`outline`の`text`または`title`は, ソースのタグとして取り込む.
+
+```bash
+curl -X POST \
+  -F "file=@subscriptions.opml" \
+  http://localhost:8080/api/v1/sources/import-opml
+```
+
+結果には対象件数, 追加件数, 重複件数, 失敗件数, 新規タグ件数が含まれる.
+同じOPML内の重複URLと登録済みURLは追加しない.
+登録済みソースと複数タグはOPML 2.0の`category`属性を使って出力する.
+出力したOPMLはそのまま再インポートできる.
+
+```bash
+curl -o fliqrss-subscriptions.opml \
+  http://localhost:8080/api/v1/sources/export-opml
+```
+
+解析には次の制限を適用する.
+
+- ファイルサイズは2 MiBまで
+- `outline`要素は5,000個まで
+- 階層の深さは12まで
+- フィードは200件まで
+- フィード取得は最大8件を並行処理する
+
 取得処理には次の制限を適用する.
 
 - HTTPとHTTPSだけを許可する
@@ -112,7 +161,5 @@ curl -X POST http://localhost:8080/api/v1/sources/{id}/refresh
 
 - RSS 1.0の解析
 - バックグラウンドでの定期収集
-- PostgreSQLへの保存
 - 認証とユーザーごとの状態管理
 - React静的ファイルの配信
-- Docker Composeと本番用Dockerfile

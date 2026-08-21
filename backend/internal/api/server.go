@@ -1,22 +1,37 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/model"
+	"fliqrss/backend/internal/opml"
 	"fliqrss/backend/internal/store"
 )
 
-const maxRequestBody = 1 << 20
+const (
+	maxRequestBody     = 1 << 20
+	maxOPMLRequestBody = opml.DefaultMaxBytes + 256<<10
+	opmlImportWorkers  = 8
+)
+
+var (
+	errInvalidOPMLContentType = errors.New("OPML request must be multipart/form-data or XML")
+	errMissingOPMLFile        = errors.New("OPML file is required")
+	errOPMLTooLarge           = errors.New("OPML file is too large")
+)
 
 type dataResponse struct {
 	Data any `json:"data"`
@@ -32,18 +47,18 @@ type errorResponse struct {
 }
 
 type Server struct {
-	store         *store.Memory
+	store         store.Repository
 	feedLoader    feed.Loader
 	allowedOrigin string
 	handler       http.Handler
 }
 
-func NewServer(memory *store.Memory, allowedOrigin string) *Server {
-	return NewServerWithFeedLoader(memory, allowedOrigin, feed.NewClient())
+func NewServer(repository store.Repository, allowedOrigin string) *Server {
+	return NewServerWithFeedLoader(repository, allowedOrigin, feed.NewClient())
 }
 
-func NewServerWithFeedLoader(memory *store.Memory, allowedOrigin string, loader feed.Loader) *Server {
-	s := &Server{store: memory, feedLoader: loader, allowedOrigin: allowedOrigin}
+func NewServerWithFeedLoader(repository store.Repository, allowedOrigin string, loader feed.Loader) *Server {
+	s := &Server{store: repository, feedLoader: loader, allowedOrigin: allowedOrigin}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/articles", s.listArticles)
@@ -52,6 +67,8 @@ func NewServerWithFeedLoader(memory *store.Memory, allowedOrigin string, loader 
 	mux.HandleFunc("PATCH /api/v1/articles/{id}/state", s.updateArticleState)
 	mux.HandleFunc("GET /api/v1/sources", s.listSources)
 	mux.HandleFunc("POST /api/v1/sources", s.createSource)
+	mux.HandleFunc("POST /api/v1/sources/import-opml", s.importOPML)
+	mux.HandleFunc("GET /api/v1/sources/export-opml", s.exportOPML)
 	mux.HandleFunc("PATCH /api/v1/sources/{id}", s.updateSource)
 	mux.HandleFunc("DELETE /api/v1/sources/{id}", s.deleteSource)
 	mux.HandleFunc("POST /api/v1/sources/{id}/refresh", s.refreshSource)
@@ -121,7 +138,12 @@ func (s *Server) updateArticleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resetSkipped(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{"restored": s.store.ResetSkipped()}})
+	restored, err := s.store.ResetSkipped()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{"restored": restored}})
 }
 
 func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
@@ -169,6 +191,224 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, dataResponse{Data: source})
+}
+
+type opmlImportResult struct {
+	Total       int `json:"total"`
+	Added       int `json:"added"`
+	Duplicates  int `json:"duplicates"`
+	Failed      int `json:"failed"`
+	TagsCreated int `json:"tagsCreated"`
+}
+
+func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
+	payload, err := readOPMLPayload(w, r)
+	if err != nil {
+		switch {
+		case errors.Is(err, errInvalidOPMLContentType):
+			writeError(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		case errors.Is(err, errMissingOPMLFile):
+			writeError(w, http.StatusBadRequest, "missing_opml_file", err.Error())
+		case errors.Is(err, errOPMLTooLarge):
+			writeError(w, http.StatusRequestEntityTooLarge, "opml_too_large", err.Error())
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_opml_upload", "OPML upload could not be read")
+		}
+		return
+	}
+
+	subscriptions, err := opml.Parse(bytes.NewReader(payload))
+	if err != nil {
+		if errors.Is(err, opml.ErrLimitExceeded) {
+			writeError(w, http.StatusRequestEntityTooLarge, "opml_limit_exceeded", "OPML contains too many elements or exceeds the maximum depth")
+			return
+		}
+		writeError(w, http.StatusUnprocessableEntity, "invalid_opml", "file does not contain valid OPML")
+		return
+	}
+
+	result := opmlImportResult{Total: len(subscriptions)}
+	seenURLs := make(map[string]struct{}, len(subscriptions))
+	jobs := make([]opml.Subscription, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		rawURL := strings.TrimSpace(subscription.XMLURL)
+		urlKey := strings.ToLower(rawURL)
+		if _, duplicate := seenURLs[urlKey]; duplicate || s.store.HasSourceURL(rawURL) {
+			result.Duplicates++
+			continue
+		}
+		seenURLs[urlKey] = struct{}{}
+		if err := validateFeedURL(rawURL); err != nil {
+			result.Failed++
+			continue
+		}
+		subscription.XMLURL = rawURL
+		jobs = append(jobs, subscription)
+	}
+
+	jobChannel := make(chan opml.Subscription)
+	workerCount := min(opmlImportWorkers, len(jobs))
+	var resultMutex sync.Mutex
+	var workers sync.WaitGroup
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for subscription := range jobChannel {
+				tagsCreated, duplicate, err := s.importOPMLSubscription(r.Context(), subscription)
+				resultMutex.Lock()
+				switch {
+				case duplicate:
+					result.Duplicates++
+				case err != nil:
+					result.Failed++
+				default:
+					result.Added++
+					result.TagsCreated += tagsCreated
+				}
+				resultMutex.Unlock()
+			}
+		}()
+	}
+	for _, subscription := range jobs {
+		jobChannel <- subscription
+	}
+	close(jobChannel)
+	workers.Wait()
+
+	writeJSON(w, http.StatusOK, dataResponse{Data: result})
+}
+
+func (s *Server) exportOPML(w http.ResponseWriter, _ *http.Request) {
+	tagNames := make(map[string]string)
+	for _, tag := range s.store.ListTags() {
+		tagNames[tag.ID] = tag.Name
+	}
+	subscriptions := make([]opml.Subscription, 0)
+	for _, source := range s.store.ListSources() {
+		tags := make([]string, 0, len(source.TagIDs))
+		for _, tagID := range source.TagIDs {
+			if name := tagNames[tagID]; name != "" {
+				tags = append(tags, name)
+			}
+		}
+		subscriptions = append(subscriptions, opml.Subscription{
+			Title:  source.Name,
+			XMLURL: source.URL,
+			Type:   source.Format,
+			Tags:   tags,
+		})
+	}
+
+	payload, err := opml.Marshal("fliqrss subscriptions", subscriptions, time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "opml_export_failed", "OPML could not be generated")
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-opml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="fliqrss-subscriptions.opml"`)
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(payload); err != nil {
+		panic(fmt.Errorf("write OPML response: %w", err))
+	}
+}
+
+func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.Subscription) (int, bool, error) {
+	document, err := s.feedLoader.Load(ctx, subscription.XMLURL)
+	if err != nil {
+		return 0, false, err
+	}
+	name := strings.TrimSpace(subscription.Title)
+	if name == "" {
+		name = document.Title
+	}
+	if name == "" {
+		return 0, false, errors.New("feed title is missing")
+	}
+
+	source, err := s.store.CreateSource(name, subscription.XMLURL, document.Format)
+	if errors.Is(err, store.ErrConflict) {
+		return 0, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	source, _, err = s.store.UpsertArticles(source.ID, document.Format, articlesFromFeed(source, document))
+	if err != nil {
+		return 0, false, err
+	}
+
+	tagsCreated := 0
+	tagIDs := make([]string, 0, len(subscription.Tags))
+	for _, tagName := range subscription.Tags {
+		tag, created, err := s.store.FindOrCreateTag(tagName)
+		if err != nil {
+			return 0, false, err
+		}
+		if created {
+			tagsCreated++
+		}
+		tagIDs = append(tagIDs, tag.ID)
+	}
+	if _, err := s.store.SetSourceTags(source.ID, tagIDs); err != nil {
+		return 0, false, err
+	}
+	return tagsCreated, false, nil
+}
+
+func readOPMLPayload(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxOPMLRequestBody)
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, errInvalidOPMLContentType
+	}
+
+	var reader io.Reader
+	var closer io.Closer
+	switch mediaType {
+	case "multipart/form-data":
+		multipartReader, err := r.MultipartReader()
+		if err != nil {
+			return nil, err
+		}
+		for {
+			part, err := multipartReader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if part.FormName() == "file" {
+				reader = part
+				closer = part
+				break
+			}
+			part.Close()
+		}
+		if reader == nil {
+			return nil, errMissingOPMLFile
+		}
+	case "application/xml", "text/xml", "text/x-opml":
+		reader = r.Body
+	default:
+		return nil, errInvalidOPMLContentType
+	}
+	if closer != nil {
+		defer closer.Close()
+	}
+
+	payload, err := io.ReadAll(io.LimitReader(reader, opml.DefaultMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > opml.DefaultMaxBytes {
+		return nil, errOPMLTooLarge
+	}
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return nil, errMissingOPMLFile
+	}
+	return payload, nil
 }
 
 func validateFeedURL(rawURL string) error {

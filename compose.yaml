@@ -1,0 +1,52 @@
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fliqrss
+      POSTGRES_USER: fliqrss
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fliqrss-dev}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fliqrss -d fliqrss"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      ADDR: :8080
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      DATABASE_URL: postgres://fliqrss:${POSTGRES_PASSWORD:-fliqrss-dev}@database:5432/fliqrss?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend-test:
+    image: golang:1.24-alpine
+    profiles: ["test"]
+    working_dir: /src
+    environment:
+      TEST_DATABASE_URL: postgres://fliqrss:${POSTGRES_PASSWORD:-fliqrss-dev}@database:5432/fliqrss?sslmode=disable
+    volumes:
+      - ./backend:/src
+      - go-mod-cache:/go/pkg/mod
+    depends_on:
+      database:
+        condition: service_healthy
+    command: ["go", "test", "-mod=readonly", "./..."]
+
+volumes:
+  postgres-data:
+  go-mod-cache:
