@@ -22,3 +22,7 @@ npm-debug.log*
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
+
+# Backend development cache
+backend/.cache/
+backend/.tmp/
