@@ -13,6 +13,20 @@ interface ErrorEnvelope {
   }
 }
 
+async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  let body: ErrorEnvelope = {}
+  try {
+    body = await response.json() as ErrorEnvelope
+  } catch {
+    // The fallback below is used when the server did not return JSON.
+  }
+  return new ApiError(
+    response.status,
+    body.error?.code ?? 'request_failed',
+    body.error?.message ?? `API request failed with status ${response.status}`,
+  )
+}
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -27,25 +41,23 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
-  if (init?.body) headers.set('Content-Type', 'application/json')
+  if (init?.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
   if (!response.ok) {
-    let body: ErrorEnvelope = {}
-    try {
-      body = await response.json() as ErrorEnvelope
-    } catch {
-      // The fallback below is used when the server did not return JSON.
-    }
-    throw new ApiError(
-      response.status,
-      body.error?.code ?? 'request_failed',
-      body.error?.message ?? `API request failed with status ${response.status}`,
-    )
+    throw await apiErrorFromResponse(response)
   }
   if (response.status === 204) return undefined as T
   const envelope = await response.json() as DataEnvelope<T>
   return envelope.data
+}
+
+export interface OPMLImportResult {
+  total: number
+  added: number
+  duplicates: number
+  failed: number
+  tagsCreated: number
 }
 
 export const api = {
@@ -61,6 +73,16 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ name, url }),
   }),
+  importOPML: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<OPMLImportResult>('/sources/import-opml', { method: 'POST', body: form })
+  },
+  exportOPML: async () => {
+    const response = await fetch(`${API_BASE_URL}/sources/export-opml`)
+    if (!response.ok) throw await apiErrorFromResponse(response)
+    return response.blob()
+  },
   updateSource: (id: string, values: { name?: string; enabled?: boolean }) => request<Source>(`/sources/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(values),

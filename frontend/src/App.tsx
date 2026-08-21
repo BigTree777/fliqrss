@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api/client'
+import type { OPMLImportResult } from './api/client'
 import { ArticleCard } from './components/ArticleCard'
 import { Icon } from './components/Icon'
 import type { Article, ArticleAction, Source, Tag } from './types/article'
@@ -29,6 +30,10 @@ function App() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(() => window.location.hash === '#/sources')
   const [newSourceName, setNewSourceName] = useState('')
   const [newSourceUrl, setNewSourceUrl] = useState('')
+  const [opmlFile, setOPMLFile] = useState<File | null>(null)
+  const [opmlResult, setOPMLResult] = useState<OPMLImportResult | null>(null)
+  const [importingOPML, setImportingOPML] = useState(false)
+  const [exportingOPML, setExportingOPML] = useState(false)
   const [openTagPickerSourceId, setOpenTagPickerSourceId] = useState<string | null>(null)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
@@ -40,7 +45,6 @@ function App() {
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [animating, setAnimating] = useState(false)
-  const [openArticle, setOpenArticle] = useState<Article | null>(null)
   const [libraryMode, setLibraryMode] = useState<LibraryMode | null>(() => libraryModeFromHash())
   const [notice, setNotice] = useState('')
   const [apiError, setApiError] = useState('')
@@ -50,6 +54,7 @@ function App() {
   const activePointer = useRef<number | null>(null)
   const animationTimer = useRef<number | null>(null)
   const noticeTimer = useRef<number | null>(null)
+  const opmlInput = useRef<HTMLInputElement | null>(null)
 
   const deletedIds = useMemo(() => new Set(articles.filter((item) => item.state.deleted).map((item) => item.id)), [articles])
   const favoriteIds = useMemo(() => new Set(articles.filter((item) => item.state.favorite).map((item) => item.id)), [articles])
@@ -134,7 +139,6 @@ function App() {
 
   const replaceArticle = useCallback((nextArticle: Article) => {
     setArticles((current) => current.map((item) => item.id === nextArticle.id ? nextArticle : item))
-    setOpenArticle((current) => current?.id === nextArticle.id ? nextArticle : current)
   }, [])
 
   const updateArticleState = useCallback(async (articleId: string, action: ArticleAction) => {
@@ -192,6 +196,54 @@ function App() {
       showApiError(error)
     } finally {
       setPending(false)
+    }
+  }
+
+  const importOPML = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!opmlFile || importingOPML) return
+    setImportingOPML(true)
+    try {
+      const result = await api.importOPML(opmlFile)
+      const [nextArticles, nextSources, nextTags] = await Promise.all([
+        api.listArticles(),
+        api.listSources(),
+        api.listTags(),
+      ])
+      setArticles(nextArticles)
+      setManagedSources(nextSources)
+      setManagedTags(nextTags)
+      setOPMLResult(result)
+      setOPMLFile(null)
+      if (opmlInput.current) opmlInput.current.value = ''
+      setApiError('')
+      showNotice(`OPMLから${result.added}件追加しました`)
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setImportingOPML(false)
+    }
+  }
+
+  const exportOPML = async () => {
+    if (exportingOPML) return
+    setExportingOPML(true)
+    try {
+      const blob = await api.exportOPML()
+      const downloadURL = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadURL
+      link.download = 'fliqrss-subscriptions.opml'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(downloadURL), 0)
+      setApiError('')
+      showNotice('OPMLを出力しました')
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setExportingOPML(false)
     }
   }
 
@@ -334,15 +386,20 @@ function App() {
     setDragX(0)
   }
 
-  const openDetail = async (article: Article) => {
-    setOpenArticle(article)
+  const markArticleRead = useCallback(async (article: Article) => {
     if (article.state.read) return
     try {
       await updateArticleState(article.id, 'read')
     } catch (error) {
       showApiError(error)
     }
-  }
+  }, [showApiError, updateArticleState])
+
+  const openOriginalArticle = useCallback((article: Article) => {
+    if (!article.url) return
+    window.open(article.url, '_blank', 'noopener,noreferrer')
+    void markArticleRead(article)
+  }, [markArticleRead])
 
   const toggleFavorite = async (articleId: string) => {
     const article = articles.find((item) => item.id === articleId)
@@ -420,21 +477,16 @@ function App() {
         return
       }
 
-      if (openArticle) {
-        if (event.key === 'Escape') setOpenArticle(null)
-        return
-      }
-
       if (libraryMode || sourceManagerOpen || tagManagerOpen) return
 
       if (event.key === 'ArrowLeft') completeSwipe('skip')
       if (event.key === 'ArrowRight') completeSwipe('save')
-      if (event.key === 'Enter' && currentArticle) openDetail(currentArticle)
+      if (event.key === 'Enter' && currentArticle) openOriginalArticle(currentArticle)
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [completeSwipe, currentArticle, libraryMode, menuOpen, openArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
+  }, [completeSwipe, currentArticle, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
 
   useEffect(
     () => () => {
@@ -592,6 +644,17 @@ function App() {
             </p>
           </div>
 
+          <section className="opml-export-panel" aria-labelledby="opml-export-heading">
+            <div>
+              <p className="eyebrow">DATA EXPORT</p>
+              <h2 id="opml-export-heading">データ出力</h2>
+              <p>登録中のソースとタグを, OPMLファイルとして保存します.</p>
+            </div>
+            <button disabled={exportingOPML} onClick={() => void exportOPML()} type="button">
+              {exportingOPML ? '出力中' : 'OPML出力'}
+            </button>
+          </section>
+
           <form className="source-add-form" onSubmit={addSource}>
             <div className="source-form-field source-form-field--name">
               <label htmlFor="new-source-name">ソース名</label>
@@ -620,6 +683,40 @@ function App() {
               {pending ? '取得中' : '追加'}
             </button>
           </form>
+
+          <section className="opml-import-panel" aria-labelledby="opml-import-heading">
+            <div>
+              <p className="eyebrow">OPML IMPORT</p>
+              <h2 id="opml-import-heading">OPMLから一括追加</h2>
+              <p>フォルダー階層はソースのタグとして取り込みます.</p>
+            </div>
+            <form onSubmit={importOPML}>
+              <label className="opml-file-control" htmlFor="opml-file">
+                <span>{opmlFile?.name ?? 'OPMLファイルを選択'}</span>
+                <input
+                  accept=".opml,.xml,application/xml,text/xml,text/x-opml"
+                  id="opml-file"
+                  onChange={(event) => {
+                    setOPMLFile(event.target.files?.[0] ?? null)
+                    setOPMLResult(null)
+                  }}
+                  ref={opmlInput}
+                  type="file"
+                />
+              </label>
+              <button disabled={!opmlFile || importingOPML} type="submit">
+                {importingOPML ? '取込中' : '取込'}
+              </button>
+            </form>
+            {opmlResult && (
+              <dl className="opml-import-result" aria-label="OPML取込結果">
+                <div><dt>追加</dt><dd>{opmlResult.added}件</dd></div>
+                <div><dt>重複</dt><dd>{opmlResult.duplicates}件</dd></div>
+                <div><dt>失敗</dt><dd>{opmlResult.failed}件</dd></div>
+                <div><dt>新規タグ</dt><dd>{opmlResult.tagsCreated}件</dd></div>
+              </dl>
+            )}
+          </section>
 
           <section className="source-manager-list" aria-label="ニュースソース一覧">
             {managedSources.map((item) => (
@@ -780,10 +877,23 @@ function App() {
             {libraryArticles.map((article) => (
               <article className="library-item" key={article.id}>
                 <div className={`queue-thumb queue-thumb--${article.visualTheme}`}>{article.sourceInitials}</div>
-                <button className="library-article-title" onClick={() => openDetail(article)} type="button">
-                  <span>{tagNamesForSource(article.sourceId).join(' / ') || 'タグなし'} · {article.source}</span>
-                  <strong>{article.title}</strong>
-                </button>
+                {article.url ? (
+                  <a
+                    className="library-article-title"
+                    href={article.url}
+                    onClick={() => void markArticleRead(article)}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <span>{tagNamesForSource(article.sourceId).join(' / ') || 'タグなし'} · {article.source}</span>
+                    <strong>{article.title}</strong>
+                  </a>
+                ) : (
+                  <div className="library-article-title is-disabled">
+                    <span>{tagNamesForSource(article.sourceId).join(' / ') || 'タグなし'} · {article.source}</span>
+                    <strong>{article.title}</strong>
+                  </div>
+                )}
                 <button className="library-remove" onClick={() => removeFromLibrary(article.id)} type="button">
                   {libraryMode === 'deleted' ? '復元' : '解除'}
                 </button>
@@ -894,7 +1004,7 @@ function App() {
                   dragging={dragging}
                   isFavorite={favoriteIds.has(currentArticle.id)}
                   onDelete={() => deleteArticle(currentArticle.id)}
-                  onOpen={() => openDetail(currentArticle)}
+                  onVisit={() => void markArticleRead(currentArticle)}
                   onToggleFavorite={() => toggleFavorite(currentArticle.id)}
                   onPointerCancel={handlePointerCancel}
                   onPointerDown={handlePointerDown}
@@ -942,59 +1052,6 @@ function App() {
       )}
 
       {notice && <div className="notice" role="status"><Icon name="check" size={17} />{notice}</div>}
-
-      {openArticle && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setOpenArticle(null)}>
-          <article
-            aria-labelledby="detail-title"
-            aria-modal="true"
-            className="article-modal"
-            onMouseDown={(event) => event.stopPropagation()}
-            role="dialog"
-          >
-            <button className="modal-close" onClick={() => setOpenArticle(null)} type="button" aria-label="閉じる">
-              <Icon name="close" size={22} />
-            </button>
-            <div className={`modal-visual article-visual--${openArticle.visualTheme}`}>
-              <span>{openArticle.visualLabel}</span>
-            </div>
-            <div className="modal-content">
-              <div className="article-meta">
-                <span className="source-mark">{openArticle.sourceInitials}</span>
-                <span className="source-name">{openArticle.source}</span>
-                <span className="meta-dot" />
-                <span>{openArticle.publishedAt}</span>
-              </div>
-              <div className="article-tags modal-tags">
-                {(tagNamesForSource(openArticle.sourceId).length ? tagNamesForSource(openArticle.sourceId) : ['タグなし']).map(
-                  (tagName) => <span key={tagName}>{tagName}</span>,
-                )}
-              </div>
-              <h2 id="detail-title">{openArticle.title}</h2>
-              {openArticle.body.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-              {openArticle.url && (
-                <a className="mock-note" href={openArticle.url} rel="noreferrer" target="_blank">元の記事を開く</a>
-              )}
-              <button
-                aria-pressed={favoriteIds.has(openArticle.id)}
-                className={`modal-favorite ${favoriteIds.has(openArticle.id) ? 'is-active' : ''}`}
-                onClick={() => toggleFavorite(openArticle.id)}
-                type="button"
-              >
-                <Icon name="star" size={18} />
-                {favoriteIds.has(openArticle.id) ? 'お気に入り解除' : 'お気に入り追加'}
-              </button>
-              <button
-                className="modal-next"
-                onClick={() => setOpenArticle(null)}
-                type="button"
-              >
-                {libraryMode ? '一覧へ' : 'カードへ'} <Icon name="chevron-right" size={18} />
-              </button>
-            </div>
-          </article>
-        </div>
-      )}
 
     </div>
   )

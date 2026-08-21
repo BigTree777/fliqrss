@@ -9,7 +9,7 @@ interface ArticleCardProps {
   dragging: boolean
   isFavorite: boolean
   onDelete: () => void
-  onOpen: () => void
+  onVisit: () => void
   onToggleFavorite: () => void
   onPointerDown: PointerEventHandler<HTMLElement>
   onPointerCancel: PointerEventHandler<HTMLElement>
@@ -24,7 +24,7 @@ export function ArticleCard({
   dragging,
   isFavorite,
   onDelete,
-  onOpen,
+  onVisit,
   onToggleFavorite,
   onPointerDown,
   onPointerCancel,
@@ -51,34 +51,28 @@ export function ArticleCard({
       <div className="swipe-indicator swipe-indicator--save" style={{ opacity: saveOpacity }}>
         SAVE
       </div>
-      <div className={`article-visual article-visual--${article.visualTheme}`}>
-        <button
-          aria-label="削除記事一覧へ移動"
-          className="card-icon-button card-icon-button--delete"
-          onClick={onDelete}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          <Icon name="trash" size={24} />
-        </button>
-        <button
-          aria-label={isFavorite ? 'お気に入りから外す' : 'お気に入りに追加'}
-          aria-pressed={isFavorite}
-          className={`card-icon-button card-icon-button--favorite ${isFavorite ? 'is-active' : ''}`}
-          onClick={onToggleFavorite}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          <Icon name="star" size={24} />
-        </button>
-        <div className="visual-grid" />
-        <div className="visual-orbit visual-orbit--one" />
-        <div className="visual-orbit visual-orbit--two" />
-        <span className="visual-index">{article.id.slice(0, 2).toUpperCase()}</span>
-        <span className="visual-label">{article.visualLabel}</span>
-      </div>
-
       <div className="article-content">
+        <div className="card-toolbar">
+          <button
+            aria-label="削除記事一覧へ移動"
+            className="card-icon-button card-icon-button--delete"
+            onClick={onDelete}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            <Icon name="trash" size={24} />
+          </button>
+          <button
+            aria-label={isFavorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+            aria-pressed={isFavorite}
+            className={`card-icon-button card-icon-button--favorite ${isFavorite ? 'is-active' : ''}`}
+            onClick={onToggleFavorite}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            <Icon name="star" size={24} />
+          </button>
+        </div>
         <div className="article-meta">
           <span className="source-mark">{article.sourceInitials}</span>
           <span className="source-name">{article.source}</span>
@@ -97,15 +91,21 @@ export function ArticleCard({
 
         <div className="article-footer">
           <span>{article.readTime} min read</span>
-          <button
-            className="read-link"
-            onClick={onOpen}
-            onPointerDown={(event) => event.stopPropagation()}
-            type="button"
-          >
-            読む
-            <Icon name="chevron-right" size={18} />
-          </button>
+          {article.url ? (
+            <a
+              className="read-link"
+              href={article.url}
+              onClick={onVisit}
+              onPointerDown={(event) => event.stopPropagation()}
+              rel="noreferrer"
+              target="_blank"
+            >
+              読む
+              <Icon name="chevron-right" size={18} />
+            </a>
+          ) : (
+            <span className="read-link read-link--disabled">リンクなし</span>
+          )}
         </div>
       </div>
     </article>
