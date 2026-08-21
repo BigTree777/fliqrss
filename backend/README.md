@@ -1,7 +1,7 @@
 # Backend
 
 Go標準ライブラリだけで動作するfliqrssのREST APIである.
-RSS 2.0とAtom 1.0のフィード登録, 形式の自動判定, 記事取込に対応する.
+RSS 2.0とAtom 1.0のフィード登録, 形式の自動判定, 記事取込, 定期取得に対応する.
 PostgreSQLへ記事, ソース, タグ, 閲覧状態を保存する.
 初期状態は空であり, ダミーの記事, ソース, タグは登録しない.
 
@@ -27,6 +27,13 @@ DATABASE_URL='postgres://fliqrss:fliqrss-dev@localhost:5432/fliqrss?sslmode=disa
 
 `DATABASE_URL`を指定しない場合は, 開発とテスト用のインメモリ保存で起動する.
 この場合のデータは再起動時に消える.
+
+定期取得の間隔は`FEED_REFRESH_INTERVAL`で変更できる.
+Goの時間表記を使用し, 標準値は`15m`である.
+
+```bash
+FEED_REFRESH_INTERVAL=30m go run ./cmd/server
+```
 
 ## テスト
 
@@ -119,6 +126,13 @@ curl -X POST \
 curl -X POST http://localhost:8080/api/v1/sources/{id}/refresh
 ```
 
+## 定期取得
+
+バックエンド起動時に, 取得状態が有効なニュースソースを一度更新する.
+その後は`FEED_REFRESH_INTERVAL`で指定した間隔を空けて更新する.
+最大8件を並行取得し, 1件の取得失敗が他のソースやAPIサーバーを停止させることはない.
+停止中のソースは定期取得の対象外であり, 取得結果とエラーはバックエンドのログへ記録する.
+
 ## OPMLの取込
 
 OPML 1.0または2.0の`outline`要素から`xmlUrl`を読み取り, ニュースソースを一括追加する.
@@ -160,6 +174,5 @@ curl -o fliqrss-subscriptions.opml \
 ## 未実装
 
 - RSS 1.0の解析
-- バックグラウンドでの定期収集
 - 認証とユーザーごとの状態管理
 - React静的ファイルの配信

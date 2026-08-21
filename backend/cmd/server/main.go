@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,12 +12,19 @@ import (
 	"time"
 
 	"fliqrss/backend/internal/api"
+	"fliqrss/backend/internal/collector"
+	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/store"
 )
 
 func main() {
 	addr := environment("ADDR", ":8080")
 	allowedOrigin := environment("CORS_ORIGIN", "http://localhost:5173")
+	refreshInterval, err := durationEnvironment("FEED_REFRESH_INTERVAL", 15*time.Minute)
+	if err != nil {
+		slog.Error("invalid feed refresh interval", "error", err)
+		os.Exit(1)
+	}
 	repository, closeRepository, err := openRepository()
 	if err != nil {
 		slog.Error("database initialization failed", "error", err)
@@ -24,7 +32,8 @@ func main() {
 	}
 	defer closeRepository()
 
-	application := api.NewServer(repository, allowedOrigin)
+	feedLoader := feed.NewClient()
+	application := api.NewServerWithFeedLoader(repository, allowedOrigin, feedLoader)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           application.Handler(),
@@ -36,6 +45,11 @@ func main() {
 
 	shutdownContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	collectionDone := make(chan struct{})
+	go func() {
+		defer close(collectionDone)
+		collector.New(repository, feedLoader, collector.DefaultConcurrency, slog.Default()).Run(shutdownContext, refreshInterval)
+	}()
 
 	go func() {
 		<-shutdownContext.Done()
@@ -47,10 +61,28 @@ func main() {
 	}()
 
 	slog.Info("backend listening", "address", addr, "cors_origin", allowedOrigin)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = server.ListenAndServe()
+	stop()
+	<-collectionDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func durationEnvironment(key string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration such as 15m: %w", key, err)
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return duration, nil
 }
 
 func openRepository() (store.Repository, func(), error) {

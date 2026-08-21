@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/model"
@@ -185,7 +184,7 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	source, _, err = s.store.UpsertArticles(source.ID, document.Format, articlesFromFeed(source, document))
+	source, _, err = s.store.UpsertArticles(source.ID, document.Format, feed.ArticlesFromDocument(source, document))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -333,7 +332,7 @@ func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.S
 	if err != nil {
 		return 0, false, err
 	}
-	source, _, err = s.store.UpsertArticles(source.ID, document.Format, articlesFromFeed(source, document))
+	source, _, err = s.store.UpsertArticles(source.ID, document.Format, feed.ArticlesFromDocument(source, document))
 	if err != nil {
 		return 0, false, err
 	}
@@ -476,7 +475,7 @@ func (s *Server) refreshSource(w http.ResponseWriter, r *http.Request) {
 		writeFeedError(w, err)
 		return
 	}
-	source, added, err := s.store.UpsertArticles(source.ID, document.Format, articlesFromFeed(source, document))
+	source, added, err := s.store.UpsertArticles(source.ID, document.Format, feed.ArticlesFromDocument(source, document))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -485,69 +484,6 @@ func (s *Server) refreshSource(w http.ResponseWriter, r *http.Request) {
 		"source":        source,
 		"addedArticles": added,
 	}})
-}
-
-func articlesFromFeed(source model.Source, document feed.Document) []model.Article {
-	articles := make([]model.Article, 0, len(document.Entries))
-	for _, entry := range document.Entries {
-		summary := entry.Summary
-		if summary == "" {
-			summary = entry.Content
-		}
-		body := []string{}
-		if entry.Content != "" && entry.Content != summary {
-			body = append(body, entry.Content)
-		}
-		publishedAt := entry.PublishedAt
-		if publishedAt == "" {
-			publishedAt = time.Now().UTC().Format(time.RFC3339)
-		}
-		articles = append(articles, model.Article{
-			ID:             source.ID + "-" + strings.TrimPrefix(entry.ID, "feed-"),
-			SourceID:       source.ID,
-			Source:         source.Name,
-			SourceInitials: sourceInitials(source.Name),
-			PublishedAt:    publishedAt,
-			ReadTime:       feed.EstimateReadTime(summary, entry.Content),
-			Title:          entry.Title,
-			URL:            entry.Link,
-			Summary:        summary,
-			Body:           body,
-			VisualLabel:    strings.ToUpper(document.Format) + " FEED",
-			VisualTheme:    visualTheme(entry.ID),
-		})
-	}
-	return articles
-}
-
-func sourceInitials(name string) string {
-	words := strings.Fields(name)
-	var initials []rune
-	for _, word := range words {
-		character, _ := utf8.DecodeRuneInString(word)
-		if character != utf8.RuneError {
-			initials = append(initials, character)
-		}
-		if len(initials) == 2 {
-			break
-		}
-	}
-	if len(initials) == 1 {
-		runes := []rune(name)
-		if len(runes) > 1 {
-			initials = append(initials, runes[1])
-		}
-	}
-	return strings.ToUpper(string(initials))
-}
-
-func visualTheme(identity string) string {
-	themes := []string{"cobalt", "coral", "forest", "violet", "amber", "aqua"}
-	value := 0
-	for _, character := range identity {
-		value = (value*31 + int(character)) % len(themes)
-	}
-	return themes[value]
 }
 
 func (s *Server) setSourceTags(w http.ResponseWriter, r *http.Request) {
