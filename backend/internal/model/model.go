@@ -48,7 +48,25 @@ type Tag struct {
 type ArticleFilter struct {
 	SourceID string
 	TagID    string
+	Untagged bool
 	State    string
+}
+
+type ArticlePage struct {
+	Items      []Article `json:"items"`
+	NextCursor string    `json:"nextCursor,omitempty"`
+	Total      int       `json:"total"`
+}
+
+type ArticleStats struct {
+	Feed             int            `json:"feed"`
+	Favorite         int            `json:"favorite"`
+	Saved            int            `json:"saved"`
+	Deleted          int            `json:"deleted"`
+	Skipped          int            `json:"skipped"`
+	UntaggedFeed     int            `json:"untaggedFeed"`
+	SourceFeedCounts map[string]int `json:"sourceFeedCounts"`
+	TagFeedCounts    map[string]int `json:"tagFeedCounts"`
 }
 
 type ArticleAction string

@@ -4,6 +4,8 @@ import "fliqrss/backend/internal/model"
 
 type Repository interface {
 	ListArticles(model.ArticleFilter) []model.Article
+	ListArticlePage(model.ArticleFilter, string, int) (model.ArticlePage, error)
+	ArticleStats() model.ArticleStats
 	GetArticle(string) (model.Article, error)
 	ApplyArticleAction(string, model.ArticleAction) (model.Article, error)
 	ResetSkipped() (int, error)

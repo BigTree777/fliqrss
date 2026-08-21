@@ -91,6 +91,59 @@ func TestArticleFiltersAndActions(t *testing.T) {
 	}
 }
 
+func TestArticlePageUsesStableCursor(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
+
+	response := performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?state=feed&limit=2", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, want %d", response.Code, http.StatusOK)
+	}
+	first := decodeData[model.ArticlePage](t, response)
+	if len(first.Items) != 2 || first.Total != 6 || first.NextCursor == "" {
+		t.Fatalf("first page = %+v", first)
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/"+first.NextCursor+"/state", map[string]string{"action": "skip"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("skip cursor article status = %d", response.Code)
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?state=feed&limit=2&cursor="+first.NextCursor, nil)
+	second := decodeData[model.ArticlePage](t, response)
+	if len(second.Items) != 2 || second.Items[0].ID == first.Items[0].ID || second.Items[0].ID == first.Items[1].ID {
+		t.Fatalf("second page = %+v", second)
+	}
+	if second.Total != 5 {
+		t.Fatalf("second page total = %d, want 5", second.Total)
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?limit=0", nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid limit status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?cursor=missing", nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestArticleStats(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
+	performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/future-interface/state", map[string]string{"action": "skip"})
+	performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/small-city-business/state", map[string]string{"action": "save"})
+	performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/night-museum/state", map[string]string{"action": "favorite"})
+
+	response := performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/stats", nil)
+	stats := decodeData[model.ArticleStats](t, response)
+	if stats.Feed != 4 || stats.Skipped != 1 || stats.Saved != 1 || stats.Favorite != 1 || stats.Deleted != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if stats.SourceFeedCounts[fixture.sources["orbit"]] != 0 || stats.TagFeedCounts[fixture.tags["business"]] != 1 {
+		t.Fatalf("feed counts = %+v, %+v", stats.SourceFeedCounts, stats.TagFeedCounts)
+	}
+}
+
 func TestSourceAndTagWorkflow(t *testing.T) {
 	fixture := newTestFixture(t)
 	server := NewServer(fixture.memory, "")

@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("not found")
-	ErrConflict  = errors.New("conflict")
-	ErrBadAction = errors.New("unsupported article action")
+	ErrNotFound      = errors.New("not found")
+	ErrConflict      = errors.New("conflict")
+	ErrBadAction     = errors.New("unsupported article action")
+	ErrInvalidCursor = errors.New("invalid cursor")
 )
 
 type Memory struct {
@@ -54,6 +55,9 @@ func (s *Memory) ListArticles(filter model.ArticleFilter) []model.Article {
 		if filter.TagID != "" && !slices.Contains(article.TagIDs, filter.TagID) {
 			continue
 		}
+		if filter.Untagged && len(article.TagIDs) != 0 {
+			continue
+		}
 		if !matchesArticleState(article.State, filter.State) {
 			continue
 		}
@@ -61,6 +65,100 @@ func (s *Memory) ListArticles(filter model.ArticleFilter) []model.Article {
 		result = append(result, article)
 	}
 	return result
+}
+
+func (s *Memory) ListArticlePage(filter model.ArticleFilter, cursor string, limit int) (model.ArticlePage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit < 1 {
+		limit = 1
+	}
+	start := 0
+	if cursor != "" {
+		index := slices.Index(s.articleOrder, cursor)
+		if index < 0 {
+			return model.ArticlePage{}, ErrInvalidCursor
+		}
+		start = index + 1
+	}
+
+	matching := make([]model.Article, 0, limit+1)
+	total := 0
+	for index, id := range s.articleOrder {
+		article := s.articleForRead(id)
+		if !matchesArticleFilter(article, filter) {
+			continue
+		}
+		total++
+		if index >= start && len(matching) <= limit {
+			matching = append(matching, article)
+		}
+	}
+
+	page := model.ArticlePage{Items: matching, Total: total}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor = page.Items[len(page.Items)-1].ID
+	}
+	return page, nil
+}
+
+func (s *Memory) ArticleStats() model.ArticleStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stats := model.ArticleStats{
+		SourceFeedCounts: make(map[string]int),
+		TagFeedCounts:    make(map[string]int),
+	}
+	for _, id := range s.articleOrder {
+		article := s.articleForRead(id)
+		if matchesArticleState(article.State, "feed") {
+			stats.Feed++
+			stats.SourceFeedCounts[article.SourceID]++
+			if len(article.TagIDs) == 0 {
+				stats.UntaggedFeed++
+			}
+			for _, tagID := range article.TagIDs {
+				stats.TagFeedCounts[tagID]++
+			}
+		}
+		if article.State.Favorite {
+			stats.Favorite++
+		}
+		if article.State.Saved {
+			stats.Saved++
+		}
+		if article.State.Deleted {
+			stats.Deleted++
+		}
+		if article.State.Skipped {
+			stats.Skipped++
+		}
+	}
+	return stats
+}
+
+func (s *Memory) articleForRead(id string) model.Article {
+	article := s.articles[id]
+	if source, ok := s.sources[article.SourceID]; ok {
+		article.Source = source.Name
+		article.TagIDs = slices.Clone(source.TagIDs)
+	}
+	article.Body = slices.Clone(article.Body)
+	return article
+}
+
+func matchesArticleFilter(article model.Article, filter model.ArticleFilter) bool {
+	if filter.SourceID != "" && article.SourceID != filter.SourceID {
+		return false
+	}
+	if filter.TagID != "" && !slices.Contains(article.TagIDs, filter.TagID) {
+		return false
+	}
+	if filter.Untagged && len(article.TagIDs) != 0 {
+		return false
+	}
+	return matchesArticleState(article.State, filter.State)
 }
 
 func matchesArticleState(state model.ArticleState, requested string) bool {

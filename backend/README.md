@@ -75,6 +75,8 @@ docker compose --profile test run --rm backend-test
 | --- | --- | --- |
 | GET | `/api/v1/health` | 動作確認 |
 | GET | `/api/v1/articles` | 記事一覧 |
+| GET | `/api/v1/articles/page` | カーソル方式の記事一覧 |
+| GET | `/api/v1/articles/stats` | 状態別, ソース別, タグ別の記事件数 |
 | GET | `/api/v1/articles/{id}` | 記事詳細 |
 | PATCH | `/api/v1/articles/{id}/state` | 記事状態の変更 |
 | POST | `/api/v1/articles/reset-skipped` | スキップ由来の既読を解除 |
@@ -91,9 +93,23 @@ docker compose --profile test run --rm backend-test
 | PATCH | `/api/v1/tags/{id}` | タグ名変更 |
 | DELETE | `/api/v1/tags/{id}` | タグ削除 |
 
-記事一覧は`sourceId`, `tagId`, `state`で絞り込める.
+記事一覧は`sourceId`, `tagId`, `untagged`, `state`で絞り込める.
 `state`には`feed`, `all`, `favorite`, `saved`, `deleted`, `read`を指定できる.
 省略時は`feed`となり, 未読かつ保存されておらず, ゴミ箱に入っていない記事だけを返す.
+
+`/api/v1/articles/page`では`limit`に1から100を指定でき, 省略時は20件を返す.
+レスポンスの`nextCursor`を次のリクエストの`cursor`へ指定すると, 続きの記事を取得できる.
+`total`は指定した絞り込み条件に一致する記事の総数である.
+
+```json
+{
+  "data": {
+    "items": [],
+    "nextCursor": "article-id",
+    "total": 120
+  }
+}
+```
 
 記事状態の変更では次のように`action`を指定する.
 

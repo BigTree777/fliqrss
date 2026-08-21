@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,8 @@ func NewServerWithFeedLoader(repository store.Repository, allowedOrigin string, 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/articles", s.listArticles)
+	mux.HandleFunc("GET /api/v1/articles/page", s.listArticlePage)
+	mux.HandleFunc("GET /api/v1/articles/stats", s.articleStats)
 	mux.HandleFunc("POST /api/v1/articles/reset-skipped", s.resetSkipped)
 	mux.HandleFunc("GET /api/v1/articles/{id}", s.getArticle)
 	mux.HandleFunc("PATCH /api/v1/articles/{id}/state", s.updateArticleState)
@@ -90,17 +93,60 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listArticles(w http.ResponseWriter, r *http.Request) {
+	filter, ok := articleFilterFromRequest(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: s.store.ListArticles(filter)})
+}
+
+func (s *Server) listArticlePage(w http.ResponseWriter, r *http.Request) {
+	filter, ok := articleFilterFromRequest(w, r)
+	if !ok {
+		return
+	}
+	limit := 20
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 100")
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.store.ListArticlePage(filter, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: page})
+}
+
+func (s *Server) articleStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, dataResponse{Data: s.store.ArticleStats()})
+}
+
+func articleFilterFromRequest(w http.ResponseWriter, r *http.Request) (model.ArticleFilter, bool) {
 	state := r.URL.Query().Get("state")
 	if !validArticleStateFilter(state) {
 		writeError(w, http.StatusBadRequest, "invalid_state", "state must be feed, all, favorite, saved, deleted, or read")
-		return
+		return model.ArticleFilter{}, false
 	}
-	filter := model.ArticleFilter{
+	untagged := false
+	if rawUntagged := r.URL.Query().Get("untagged"); rawUntagged != "" {
+		parsed, err := strconv.ParseBool(rawUntagged)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_untagged", "untagged must be true or false")
+			return model.ArticleFilter{}, false
+		}
+		untagged = parsed
+	}
+	return model.ArticleFilter{
 		SourceID: r.URL.Query().Get("sourceId"),
 		TagID:    r.URL.Query().Get("tagId"),
+		Untagged: untagged,
 		State:    state,
-	}
-	writeJSON(w, http.StatusOK, dataResponse{Data: s.store.ListArticles(filter)})
+	}, true
 }
 
 func validArticleStateFilter(state string) bool {
@@ -599,6 +645,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", "resource already exists")
 	case errors.Is(err, store.ErrBadAction):
 		writeError(w, http.StatusBadRequest, "invalid_action", err.Error())
+	case errors.Is(err, store.ErrInvalidCursor):
+		writeError(w, http.StatusBadRequest, "invalid_cursor", "cursor is no longer valid")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", "an unexpected error occurred")
 	}

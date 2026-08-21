@@ -80,6 +80,14 @@ func (s *PostgreSQL) ListArticles(filter model.ArticleFilter) []model.Article {
 	return s.memory.ListArticles(filter)
 }
 
+func (s *PostgreSQL) ListArticlePage(filter model.ArticleFilter, cursor string, limit int) (model.ArticlePage, error) {
+	return s.memory.ListArticlePage(filter, cursor, limit)
+}
+
+func (s *PostgreSQL) ArticleStats() model.ArticleStats {
+	return s.memory.ArticleStats()
+}
+
 func (s *PostgreSQL) GetArticle(id string) (model.Article, error) {
 	return s.memory.GetArticle(id)
 }
