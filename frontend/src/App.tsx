@@ -58,6 +58,10 @@ function App() {
   const [importingOPML, setImportingOPML] = useState(false)
   const [exportingOPML, setExportingOPML] = useState(false)
   const [openTagPickerSourceId, setOpenTagPickerSourceId] = useState<string | null>(null)
+  const [reorderingSourceId, setReorderingSourceId] = useState<string | null>(null)
+  const [draggedSourceId, setDraggedSourceId] = useState<string | null>(null)
+  const [dragOverSourceId, setDragOverSourceId] = useState<string | null>(null)
+  const [refreshingSources, setRefreshingSources] = useState(false)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(() => window.location.hash === '#/tags')
@@ -299,6 +303,55 @@ function App() {
       showNotice('ニュースソースを削除しました')
     } catch (error) {
       showApiError(error)
+    }
+  }
+
+  const dropSource = async (targetSourceId: string) => {
+    if (!draggedSourceId || draggedSourceId === targetSourceId || reorderingSourceId) {
+      setDraggedSourceId(null)
+      setDragOverSourceId(null)
+      return
+    }
+    const previousOrder = managedSources
+    const currentIndex = previousOrder.findIndex((item) => item.id === draggedSourceId)
+    const targetIndex = previousOrder.findIndex((item) => item.id === targetSourceId)
+    if (currentIndex < 0 || targetIndex < 0) return
+    const nextOrder = [...previousOrder]
+    const [moved] = nextOrder.splice(currentIndex, 1)
+    nextOrder.splice(targetIndex, 0, moved)
+    setManagedSources(nextOrder)
+    setReorderingSourceId(draggedSourceId)
+    try {
+      const reordered = await api.reorderSources(nextOrder.map((item) => item.id))
+      setManagedSources(reordered)
+      setApiError('')
+      showNotice('ニュースソースの優先順位を変更しました')
+    } catch (error) {
+      setManagedSources(previousOrder)
+      showApiError(error)
+    } finally {
+      setReorderingSourceId(null)
+      setDraggedSourceId(null)
+      setDragOverSourceId(null)
+    }
+  }
+
+  const refreshAllSources = async () => {
+    if (refreshingSources) return
+    setRefreshingSources(true)
+    try {
+      const result = await api.refreshAllSources()
+      await Promise.all([loadData(), loadFeed()])
+      setApiError('')
+      if (result.failed) {
+        showNotice(`${result.refreshed}件を更新し, ${result.failed}件失敗しました`)
+      } else {
+        showNotice(`${result.refreshed}件のニュースソースを更新しました`)
+      }
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setRefreshingSources(false)
     }
   }
 
@@ -693,6 +746,16 @@ function App() {
 
         <div className="header-menu">
           <button
+            aria-label={refreshingSources ? 'ニュースソースを更新中' : 'すべてのニュースソースを更新'}
+            className={`header-refresh-button${refreshingSources ? ' is-refreshing' : ''}`}
+            disabled={refreshingSources || !managedSources.some((item) => item.enabled)}
+            onClick={() => void refreshAllSources()}
+            title={refreshingSources ? '更新中' : 'ニュースソースを更新'}
+            type="button"
+          >
+            <Icon name="refresh" size={20} />
+          </button>
+          <button
             aria-controls="main-menu"
             aria-expanded={menuOpen}
             aria-label={menuOpen ? 'メニューを閉じる' : 'メニューを開く'}
@@ -754,7 +817,7 @@ function App() {
             <p className="eyebrow">SOURCE SETTINGS</p>
             <h1>ニュースソース</h1>
             <p className="category-page-description">
-              収集するRSS・Atomを追加し, 取得状態とタグの割り当てをニュースソースごとに管理できます.
+              収集するRSS・Atomを追加し, 取得状態とタグの割り当てをニュースソースごとに管理できます. ドラッグして優先順位を変更し, ヘッダーの更新アイコンで重複判定へ反映します.
             </p>
           </div>
 
@@ -834,7 +897,38 @@ function App() {
 
           <section className="source-manager-list" aria-label="ニュースソース一覧">
             {managedSources.map((item) => (
-              <article className="source-manager-item" key={item.id}>
+              <article
+                className={`source-manager-item${dragOverSourceId === item.id ? ' is-drag-over' : ''}${draggedSourceId === item.id ? ' is-dragging' : ''}`}
+                key={item.id}
+                onDragOver={(event) => {
+                  if (!draggedSourceId || reorderingSourceId) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  setDragOverSourceId(item.id)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  void dropSource(item.id)
+                }}
+              >
+                <div className="source-priority-controls">
+                  <button
+                    aria-label={`${item.name}をドラッグして並び替え`}
+                    className="source-drag-handle"
+                    disabled={Boolean(reorderingSourceId)}
+                    draggable={!reorderingSourceId}
+                    onDragEnd={() => {
+                      setDraggedSourceId(null)
+                      setDragOverSourceId(null)
+                    }}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', item.id)
+                      setDraggedSourceId(item.id)
+                    }}
+                    type="button"
+                  ><Icon name="drag-handle" size={27} /></button>
+                </div>
                 <div className="source-manager-icon"><Icon name="rss" size={20} /></div>
                 <div className="source-manager-details">
                   <div>
@@ -891,10 +985,23 @@ function App() {
                   </div>
                 </div>
                 <div className="source-manager-actions">
-                  <button onClick={() => void toggleSourceEnabled(item)} type="button">
-                    {item.enabled ? '停止' : '再開'}
+                  <button
+                    aria-label={`${item.name}の取得を${item.enabled ? '停止' : '再開'}`}
+                    onClick={() => void toggleSourceEnabled(item)}
+                    title={item.enabled ? '取得を停止' : '取得を再開'}
+                    type="button"
+                  >
+                    <Icon name={item.enabled ? 'pause' : 'play'} size={16} />
                   </button>
-                  <button className="category-delete-button" onClick={() => deleteSource(item)} type="button">削除</button>
+                  <button
+                    aria-label={`${item.name}を削除`}
+                    className="category-delete-button"
+                    onClick={() => deleteSource(item)}
+                    title="ニュースソースを削除"
+                    type="button"
+                  >
+                    <Icon name="trash" size={16} />
+                  </button>
                 </div>
               </article>
             ))}

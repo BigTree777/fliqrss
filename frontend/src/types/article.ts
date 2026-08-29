@@ -15,6 +15,10 @@ export interface Article {
   visualTheme: VisualTheme
   tagIds: string[]
   state: ArticleState
+  duplicateOfId?: string
+  duplicateReason?: 'url'
+  duplicateCount?: number
+  duplicateSources?: string[]
 }
 
 export interface ArticleState {

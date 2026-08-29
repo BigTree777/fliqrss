@@ -60,6 +60,13 @@ export interface OPMLImportResult {
   tagsCreated: number
 }
 
+export interface SourceRefreshResult {
+  sources: number
+  refreshed: number
+  added: number
+  failed: number
+}
+
 export interface ArticlePageQuery {
   state?: 'feed' | 'favorite' | 'saved' | 'deleted' | 'read' | 'all'
   sourceId?: string
@@ -108,6 +115,11 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify(values),
   }),
+  reorderSources: (sourceIds: string[]) => request<Source[]>('/sources/order', {
+    method: 'PUT',
+    body: JSON.stringify({ sourceIds }),
+  }),
+  refreshAllSources: () => request<SourceRefreshResult>('/sources/refresh', { method: 'POST' }),
   deleteSource: (id: string) => request<void>(`/sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   setSourceTags: (id: string, tagIds: string[]) => request<Source>(`/sources/${encodeURIComponent(id)}/tags`, {
     method: 'PUT',

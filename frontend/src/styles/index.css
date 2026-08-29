@@ -153,8 +153,12 @@ a:focus-visible {
   position: relative;
   z-index: 2;
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
+.header-refresh-button,
 .menu-toggle {
   position: relative;
   z-index: 3;
@@ -170,8 +174,23 @@ a:focus-visible {
   transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
+.header-refresh-button:hover,
 .menu-toggle:hover {
   transform: translateY(-1px);
+}
+
+.header-refresh-button:disabled {
+  cursor: default;
+  opacity: .35;
+  transform: none;
+}
+
+.header-refresh-button.is-refreshing svg {
+  animation: source-refresh-spin .8s linear infinite;
+}
+
+@keyframes source-refresh-spin {
+  to { transform: rotate(360deg); }
 }
 
 .menu-toggle.is-open {
@@ -1104,9 +1123,54 @@ kbd {
   padding: 17px 20px;
   border-bottom: 1px solid #e5e3dc;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 30px 42px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
+  transition: border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
+}
+
+.source-manager-item.is-drag-over {
+  border-color: #779181;
+  box-shadow: inset 0 2px 0 #779181;
+}
+
+.source-manager-item.is-dragging {
+  opacity: .45;
+}
+
+.source-priority-controls {
+  display: grid;
+  place-items: center;
+}
+
+.source-priority-controls button {
+  width: 36px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: #55635a;
+  display: grid;
+  place-items: center;
+}
+
+.source-priority-controls button:disabled {
+  cursor: default;
+  opacity: .3;
+}
+
+.source-drag-handle {
+  touch-action: none;
+  user-select: none;
+}
+
+.source-drag-handle:not(:disabled) {
+  cursor: grab;
+}
+
+.source-drag-handle:not(:disabled):active {
+  cursor: grabbing;
 }
 
 .source-manager-item:last-child {
@@ -1328,14 +1392,22 @@ kbd {
 }
 
 .source-manager-actions button {
-  padding: 7px 10px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border: 1px solid #d7d5cc;
-  border-radius: 999px;
+  border-radius: 50%;
   background: transparent;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   color: #68736b;
-  font-size: 9px;
-  font-weight: 600;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.source-manager-actions button:hover {
+  border-color: #aeb6af;
+  background: rgba(255,255,255,.7);
 }
 
 .source-manager-actions .category-delete-button {
@@ -1719,6 +1791,7 @@ kbd {
 
   .header-actions { gap: 3px; }
 
+  .header-refresh-button,
   .menu-toggle {
     width: 40px;
     height: 40px;
@@ -1879,12 +1952,12 @@ kbd {
   }
   .opml-export-panel > button { width: 100%; }
   .source-manager-item {
-    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-columns: 30px 40px minmax(0, 1fr);
     padding: 16px;
   }
   .source-manager-actions {
     grid-column: 1 / -1;
-    padding-left: 54px;
+    padding-left: 84px;
   }
   .category-manager-header { display: none; }
   .category-manager-item {
