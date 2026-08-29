@@ -18,6 +18,7 @@ PostgreSQLのスキーマはバックエンド起動時に自動作成する.
 データは`postgres-data`名前付きボリュームへ保存されるため, コンテナを再作成しても維持される.
 
 標準では`http://localhost:8080`で待ち受ける.
+Docker ComposeからVPSへ公開するポートは`BACKEND_PORT`で変更でき, VPS外部から直接接続できないよう`127.0.0.1`へ限定する.
 Viteからのアクセスを許可するオリジンは`http://localhost:5173`である.
 Goを直接起動する場合は, PostgreSQLの接続先を環境変数で指定する.
 

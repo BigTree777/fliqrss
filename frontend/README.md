@@ -13,6 +13,7 @@ npm run dev
 先にバックエンドを`http://localhost:8080`で起動する.
 ブラウザでViteが表示したURLを開く.
 開発中の`/api`へのアクセスはViteがバックエンドへ中継する.
+待受アドレスは`FRONTEND_HOST`, ポートは`FRONTEND_PORT`, 許可するホスト名は`FRONTEND_ALLOWED_HOSTS`, APIの中継先は`BACKEND_PROXY_URL`で変更できる.
 
 別のAPI URLへ接続する場合は`VITE_API_BASE_URL`を指定する.
 
