@@ -15,6 +15,10 @@ npm run dev
 開発中の`/api`へのアクセスはViteがバックエンドへ中継する.
 待受アドレスは`FRONTEND_HOST`, ポートは`FRONTEND_PORT`, 許可するホスト名は`FRONTEND_ALLOWED_HOSTS`, APIの中継先は`BACKEND_PROXY_URL`で変更できる.
 
+VPSではViteを`127.0.0.1:5173`でHTTP待受し, Tailscale Serveがtailnet内のHTTPS通信を中継する.
+`FRONTEND_ALLOWED_HOSTS`にはTailscale管理画面に表示される`*.ts.net`の完全修飾ドメイン名を指定する.
+設定と配置方法はルートの`README.md`を参照する.
+
 別のAPI URLへ接続する場合は`VITE_API_BASE_URL`を指定する.
 
 ```bash

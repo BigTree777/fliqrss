@@ -18,8 +18,14 @@ PostgreSQLのスキーマはバックエンド起動時に自動作成する.
 データは`postgres-data`名前付きボリュームへ保存されるため, コンテナを再作成しても維持される.
 
 標準では`http://localhost:8080`で待ち受ける.
-Docker ComposeからVPSへ公開するポートは`BACKEND_PORT`で変更でき, VPS外部から直接接続できないよう`127.0.0.1`へ限定する.
-Viteからのアクセスを許可するオリジンは`http://localhost:5173`である.
+Docker Composeは`BACKEND_PORT`で指定したポートをVPSの`127.0.0.1`へ割り当てる.
+`CORS_ORIGIN`の標準値はローカル開発用の`http://localhost:5173`である.
+VPSではTailscale ServeのHTTPS URLを指定する.
+
+```env
+CORS_ORIGIN=https://fliqrss-vps.<tailnet-name>.ts.net
+```
+
 Goを直接起動する場合は, PostgreSQLの接続先を環境変数で指定する.
 
 ```bash
