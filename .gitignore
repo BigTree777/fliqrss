@@ -25,4 +25,5 @@ frontend/*.tsbuildinfo
 
 # Backend development cache
 backend/.cache/
+backend/.codex-tmp/
 backend/.tmp/
