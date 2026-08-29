@@ -1,3 +1,4 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEventHandler } from 'react'
 import type { Article } from '../types/article'
 import { Icon } from './Icon'
@@ -7,8 +8,10 @@ interface ArticleCardProps {
   tagLabels: string[]
   dragX: number
   dragging: boolean
+  expanded: boolean
   isFavorite: boolean
   onDelete: () => void
+  onExpandedChange: (expanded: boolean) => void
   onVisit: () => void
   onToggleFavorite: () => void
   onPointerDown: PointerEventHandler<HTMLElement>
@@ -22,8 +25,10 @@ export function ArticleCard({
   tagLabels,
   dragX,
   dragging,
+  expanded,
   isFavorite,
   onDelete,
+  onExpandedChange,
   onVisit,
   onToggleFavorite,
   onPointerDown,
@@ -31,9 +36,50 @@ export function ArticleCard({
   onPointerMove,
   onPointerUp,
 }: ArticleCardProps) {
+  const previewRef = useRef<HTMLDivElement | null>(null)
+  const [hasOverflow, setHasOverflow] = useState(false)
   const rotation = Math.max(-8, Math.min(8, dragX / 32))
   const saveOpacity = Math.min(1, Math.max(0, dragX / 90))
   const skipOpacity = Math.min(1, Math.max(0, -dragX / 90))
+
+  useLayoutEffect(() => {
+    const preview = previewRef.current
+    if (!preview) return
+
+    const updateOverflow = () => setHasOverflow(preview.scrollHeight > preview.clientHeight + 1)
+    updateOverflow()
+    const observer = new ResizeObserver(updateOverflow)
+    observer.observe(preview)
+    return () => observer.disconnect()
+  }, [article, expanded])
+
+  useEffect(() => {
+    if (!expanded) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onExpandedChange(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [expanded, onExpandedChange])
+
+  const articleTitle = article.url ? (
+    <a
+      href={article.url}
+      onClick={onVisit}
+      onPointerDown={(event) => event.stopPropagation()}
+      rel="noreferrer"
+      target="_blank"
+    >
+      {article.title}
+    </a>
+  ) : article.title
+
+  const articleText = (
+    <>
+      <p className="article-summary">{article.summary}</p>
+      {article.body.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>)}
+    </>
+  )
 
   return (
     <article
@@ -51,7 +97,7 @@ export function ArticleCard({
       <div className="swipe-indicator swipe-indicator--save" style={{ opacity: saveOpacity }}>
         SAVE
       </div>
-      <div className="article-content">
+      {!expanded && <div className="article-content">
         <div className="card-toolbar">
           <button
             aria-label="削除記事一覧へ移動"
@@ -83,31 +129,46 @@ export function ArticleCard({
         <div className="article-tags">
           {(tagLabels.length ? tagLabels : ['タグなし']).map((tag) => <span key={tag}>{tag}</span>)}
         </div>
-        <h2>{article.title}</h2>
-        <div className="article-excerpt">
-          <p className="article-summary">{article.summary}</p>
-          {article.body.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+        <h2>{articleTitle}</h2>
+        <div className={`article-excerpt article-excerpt--preview${hasOverflow ? ' is-overflowing' : ''}`} ref={previewRef}>
+          {articleText}
         </div>
+
+        {hasOverflow && (
+          <button
+            aria-expanded={expanded}
+            className="read-more-button"
+            onClick={() => onExpandedChange(true)}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            続きを読む
+          </button>
+        )}
 
         <div className="article-footer">
           <span>{article.readTime} min read</span>
-          {article.url ? (
-            <a
-              className="read-link"
-              href={article.url}
-              onClick={onVisit}
-              onPointerDown={(event) => event.stopPropagation()}
-              rel="noreferrer"
-              target="_blank"
-            >
-              読む
-              <Icon name="chevron-right" size={18} />
-            </a>
-          ) : (
-            <span className="read-link read-link--disabled">リンクなし</span>
-          )}
         </div>
-      </div>
+      </div>}
+
+      {expanded && (
+        <section
+          aria-label={`${article.title}の全文`}
+          aria-modal="true"
+          className="article-detail"
+          onPointerDown={(event) => event.stopPropagation()}
+          role="dialog"
+        >
+          <div className="article-detail-heading">
+            <span>{article.source}</span>
+            <button autoFocus onClick={() => onExpandedChange(false)} type="button">閉じる</button>
+          </div>
+          <div className="article-detail-scroll">
+            <h2>{articleTitle}</h2>
+            <div className="article-excerpt">{articleText}</div>
+          </div>
+        </section>
+      )}
     </article>
   )
 }

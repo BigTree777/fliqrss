@@ -72,12 +72,15 @@ function App() {
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [animating, setAnimating] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
+  const [articleExpanded, setArticleExpanded] = useState(false)
   const [libraryMode, setLibraryMode] = useState<LibraryMode | null>(() => libraryModeFromHash())
   const [notice, setNotice] = useState('')
   const [apiError, setApiError] = useState('')
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
-  const pointerStart = useRef(0)
+  const pointerStart = useRef({ x: 0, y: 0 })
+  const pointerAxis = useRef<'horizontal' | 'vertical' | null>(null)
   const activePointer = useRef<number | null>(null)
   const animationTimer = useRef<number | null>(null)
   const noticeTimer = useRef<number | null>(null)
@@ -184,6 +187,8 @@ function App() {
   }, [replaceArticle])
 
   const navigateToLibrary = (mode: LibraryMode) => {
+    setFocusMode(false)
+    setArticleExpanded(false)
     const paths: Record<LibraryMode, string> = {
       favorite: '#/favorites',
       saved: '#/saved',
@@ -195,6 +200,8 @@ function App() {
   }
 
   const navigateToReader = () => {
+    setFocusMode(false)
+    setArticleExpanded(false)
     setMenuOpen(false)
     setOpenTagPickerSourceId(null)
     window.location.hash = '#/'
@@ -202,12 +209,16 @@ function App() {
   }
 
   const navigateToTags = () => {
+    setFocusMode(false)
+    setArticleExpanded(false)
     setMenuOpen(false)
     setOpenTagPickerSourceId(null)
     window.location.hash = '#/tags'
   }
 
   const navigateToSources = () => {
+    setFocusMode(false)
+    setArticleExpanded(false)
     setMenuOpen(false)
     setOpenTagPickerSourceId(null)
     window.location.hash = '#/sources'
@@ -589,6 +600,10 @@ function App() {
   }, [articles.length, feedPageQuery, loading, nextCursor, prefetching, showApiError])
 
   useEffect(() => {
+    setArticleExpanded(false)
+  }, [currentArticle?.id])
+
+  useEffect(() => {
     if (!libraryMode) {
       libraryRequestID.current += 1
       setLibraryArticles([])
@@ -638,9 +653,16 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
-      setLibraryMode(libraryModeFromHash())
-      setTagManagerOpen(window.location.hash === '#/tags')
-      setSourceManagerOpen(window.location.hash === '#/sources')
+      const nextLibraryMode = libraryModeFromHash()
+      const nextTagManagerOpen = window.location.hash === '#/tags'
+      const nextSourceManagerOpen = window.location.hash === '#/sources'
+      setLibraryMode(nextLibraryMode)
+      setTagManagerOpen(nextTagManagerOpen)
+      setSourceManagerOpen(nextSourceManagerOpen)
+      if (nextLibraryMode || nextTagManagerOpen || nextSourceManagerOpen) {
+        setFocusMode(false)
+        setArticleExpanded(false)
+      }
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
@@ -648,6 +670,11 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (articleExpanded) {
+        if (event.key === 'Escape') setArticleExpanded(false)
+        return
+      }
+
       if (openTagPickerSourceId) {
         if (event.key === 'Escape') setOpenTagPickerSourceId(null)
         return
@@ -660,6 +687,7 @@ function App() {
 
       if (libraryMode || sourceManagerOpen || tagManagerOpen) return
 
+      if (event.key === 'Escape' && focusMode) setFocusMode(false)
       if (event.key === 'ArrowLeft') completeSwipe('skip')
       if (event.key === 'ArrowRight') completeSwipe('save')
       if (event.key === 'Enter' && currentArticle) openOriginalArticle(currentArticle)
@@ -667,7 +695,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [completeSwipe, currentArticle, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
+  }, [articleExpanded, completeSwipe, currentArticle, focusMode, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
 
   useEffect(
     () => () => {
@@ -678,32 +706,49 @@ function App() {
   )
 
   const handlePointerDown: React.PointerEventHandler<HTMLElement> = (event) => {
-    if (animating) return
+    if (animating || articleExpanded) return
     activePointer.current = event.pointerId
-    pointerStart.current = event.clientX
-    setDragging(true)
-    event.currentTarget.setPointerCapture(event.pointerId)
+    pointerStart.current = { x: event.clientX, y: event.clientY }
+    pointerAxis.current = null
+    setDragging(false)
   }
 
   const handlePointerMove: React.PointerEventHandler<HTMLElement> = (event) => {
-    if (!dragging || activePointer.current !== event.pointerId) return
-    setDragX(event.clientX - pointerStart.current)
+    if (activePointer.current !== event.pointerId) return
+    const deltaX = event.clientX - pointerStart.current.x
+    const deltaY = event.clientY - pointerStart.current.y
+
+    if (!pointerAxis.current) {
+      if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 8) return
+      pointerAxis.current = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
+      if (pointerAxis.current === 'horizontal') {
+        setDragging(true)
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }
+    }
+
+    if (pointerAxis.current === 'horizontal') setDragX(deltaX)
   }
 
   const handlePointerCancel: React.PointerEventHandler<HTMLElement> = (event) => {
     if (activePointer.current !== event.pointerId) return
     activePointer.current = null
+    pointerAxis.current = null
     setDragging(false)
     setDragX(0)
   }
 
   const handlePointerUp: React.PointerEventHandler<HTMLElement> = (event) => {
     if (activePointer.current !== event.pointerId) return
-    const finalDragX = event.clientX - pointerStart.current
+    const finalDragX = event.clientX - pointerStart.current.x
+    const completedHorizontalDrag = pointerAxis.current === 'horizontal'
     activePointer.current = null
+    pointerAxis.current = null
     setDragging(false)
 
-    if (finalDragX > SWIPE_THRESHOLD) {
+    if (!completedHorizontalDrag) {
+      setDragX(0)
+    } else if (finalDragX > SWIPE_THRESHOLD) {
       completeSwipe('save')
     } else if (finalDragX < -SWIPE_THRESHOLD) {
       completeSwipe('skip')
@@ -730,7 +775,7 @@ function App() {
     : tagOptions.find((item) => item.id === tag)?.name
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${focusMode ? ' is-focus-mode' : ''}`}>
       <header className="topbar">
         <a className="brand" href="#/" aria-label="fliqrss ホーム">
           <span className="brand-mark"><span /></span>
@@ -1209,11 +1254,23 @@ function App() {
 
           <div className="reader-heading">
             <span>{filterMode === 'source' ? 'ニュースソース' : 'タグ'} · {activeFilterName ?? 'すべて'}</span>
-            <div className="progress-count">
-              <strong>
-                {String(currentArticle ? processedCount + 1 : feedTotal).padStart(2, '0')}
-              </strong>
-              <span>/ {String(feedTotal).padStart(2, '0')}</span>
+            <div className="reader-heading-tools">
+              <div className="progress-count">
+                <strong>
+                  {String(currentArticle ? processedCount + 1 : feedTotal).padStart(2, '0')}
+                </strong>
+                <span>/ {String(feedTotal).padStart(2, '0')}</span>
+              </div>
+              <button
+                aria-label={focusMode ? '集中モードを終了' : '集中モードを開始'}
+                aria-pressed={focusMode}
+                className="focus-mode-toggle"
+                onClick={() => setFocusMode((current) => !current)}
+                title={focusMode ? '集中モードを終了' : '集中モード'}
+                type="button"
+              >
+                <Icon name={focusMode ? 'collapse' : 'expand'} size={18} />
+              </button>
             </div>
           </div>
 
@@ -1235,8 +1292,10 @@ function App() {
                   tagLabels={tagNamesForSource(currentArticle.sourceId)}
                   dragX={dragX}
                   dragging={dragging}
+                  expanded={articleExpanded}
                   isFavorite={currentArticle.state.favorite}
                   onDelete={() => deleteArticle(currentArticle.id)}
+                  onExpandedChange={setArticleExpanded}
                   onVisit={() => void markArticleRead(currentArticle, true)}
                   onToggleFavorite={() => toggleFavorite(currentArticle.id)}
                   onPointerCancel={handlePointerCancel}
@@ -1262,7 +1321,7 @@ function App() {
           <div className="reader-actions">
             <button
               className="action-button action-button--skip"
-              disabled={!currentArticle || animating}
+              disabled={!currentArticle || animating || articleExpanded}
               onClick={() => completeSwipe('skip')}
               type="button"
             >
@@ -1271,7 +1330,7 @@ function App() {
             </button>
             <button
               className="action-button action-button--save"
-              disabled={!currentArticle || animating}
+              disabled={!currentArticle || animating || articleExpanded}
               onClick={() => completeSwipe('save')}
               type="button"
             >

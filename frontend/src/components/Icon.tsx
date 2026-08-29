@@ -7,6 +7,8 @@ export type IconName =
   | 'chevron-right'
   | 'close'
   | 'drag-handle'
+  | 'expand'
+  | 'collapse'
   | 'menu'
   | 'pause'
   | 'play'
@@ -28,6 +30,8 @@ const paths: Record<IconName, React.ReactNode> = {
   'chevron-right': <path d="m9 18 6-6-6-6" />,
   close: <path d="M18 6 6 18M6 6l12 12" />,
   'drag-handle': <path d="M5 7h14M5 12h14M5 17h14" />,
+  expand: <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />,
+  collapse: <path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5" />,
   menu: <path d="M5 8h14M5 16h14" />,
   pause: <path d="M8 5v14M16 5v14" />,
   play: <path d="m8 5 11 7-11 7V5Z" />,
