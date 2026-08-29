@@ -57,6 +57,19 @@ func TestArticleWorkflow(t *testing.T) {
 	if len(articles) != 6 {
 		t.Fatalf("feed length after reset = %d, want 6", len(articles))
 	}
+
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/mark-all-read", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("mark all read status = %d, want %d", response.Code, http.StatusOK)
+	}
+	marked := decodeData[map[string]int](t, response)
+	if marked["markedRead"] != 6 {
+		t.Fatalf("marked read = %d, want 6", marked["markedRead"])
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles", nil)
+	if articles = decodeData[[]model.Article](t, response); len(articles) != 0 {
+		t.Fatalf("feed length after mark all read = %d, want 0", len(articles))
+	}
 }
 
 func TestArticleFiltersAndActions(t *testing.T) {

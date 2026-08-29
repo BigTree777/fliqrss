@@ -139,6 +139,21 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	if restored.State.Read || restored.State.Skipped || !restored.State.Saved || !restored.State.Favorite {
 		t.Fatalf("reset changed unrelated article state: %+v", restored.State)
 	}
+	unread := model.Article{
+		ID:    "unread-persistent-article",
+		Title: "一括既読を確認する記事",
+		URL:   "https://example.com/articles/unread",
+	}
+	if _, added, err := repository.UpsertArticles(source.ID, "rss", []model.Article{unread}); err != nil || added != 1 {
+		t.Fatalf("upsert unread article: added=%d, err=%v", added, err)
+	}
+	if count, err := repository.MarkAllRead(); err != nil || count != 1 {
+		t.Fatalf("mark all read: count=%d, err=%v", count, err)
+	}
+	unread, err = repository.GetArticle(unread.ID)
+	if err != nil || !unread.State.Read {
+		t.Fatalf("unread article was not marked read: %+v, err=%v", unread.State, err)
+	}
 }
 
 func databaseURLWithSearchPath(databaseURL, schema string) (string, error) {

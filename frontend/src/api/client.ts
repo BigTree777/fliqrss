@@ -94,6 +94,7 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify({ action }),
   }),
+  markAllRead: () => request<{ markedRead: number }>('/articles/mark-all-read', { method: 'POST' }),
   resetSkipped: () => request<{ restored: number }>('/articles/reset-skipped', { method: 'POST' }),
 
   listSources: () => request<Source[]>('/sources'),

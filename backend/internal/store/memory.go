@@ -250,6 +250,23 @@ func applyArticleAction(state model.ArticleState, action model.ArticleAction) (m
 	return state, nil
 }
 
+func (s *Memory) MarkAllRead() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	count := 0
+	for id, article := range s.articles {
+		if article.DuplicateOfID != "" || !matchesArticleState(article.State, "feed") {
+			continue
+		}
+		article.State.Read = true
+		article.State.Skipped = false
+		s.articles[id] = article
+		count++
+	}
+	return count, nil
+}
+
 func (s *Memory) ResetSkipped() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

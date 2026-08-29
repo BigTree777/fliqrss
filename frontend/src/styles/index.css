@@ -158,6 +158,7 @@ a:focus-visible {
   gap: 7px;
 }
 
+.header-mark-all-read-button,
 .header-refresh-button,
 .menu-toggle {
   position: relative;
@@ -174,11 +175,13 @@ a:focus-visible {
   transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
+.header-mark-all-read-button:hover,
 .header-refresh-button:hover,
 .menu-toggle:hover {
   transform: translateY(-1px);
 }
 
+.header-mark-all-read-button:disabled,
 .header-refresh-button:disabled {
   cursor: default;
   opacity: .35;
@@ -250,6 +253,16 @@ a:focus-visible {
 .main-menu button.is-active {
   background: #eeece4;
   color: var(--ink);
+}
+
+.main-menu button:disabled {
+  cursor: default;
+  opacity: .4;
+}
+
+.main-menu button:disabled:hover {
+  background: transparent;
+  color: #58635b;
 }
 
 .main-menu button.is-active {
@@ -1942,6 +1955,7 @@ kbd {
 
   .header-actions { gap: 3px; }
 
+  .header-mark-all-read-button,
   .header-refresh-button,
   .menu-toggle {
     width: 40px;

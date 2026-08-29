@@ -65,6 +65,7 @@ func NewServerWithFeedLoader(repository store.Repository, allowedOrigin string, 
 	mux.HandleFunc("GET /api/v1/articles", s.listArticles)
 	mux.HandleFunc("GET /api/v1/articles/page", s.listArticlePage)
 	mux.HandleFunc("GET /api/v1/articles/stats", s.articleStats)
+	mux.HandleFunc("POST /api/v1/articles/mark-all-read", s.markAllRead)
 	mux.HandleFunc("POST /api/v1/articles/reset-skipped", s.resetSkipped)
 	mux.HandleFunc("GET /api/v1/articles/{id}", s.getArticle)
 	mux.HandleFunc("PATCH /api/v1/articles/{id}/state", s.updateArticleState)
@@ -183,6 +184,15 @@ func (s *Server) updateArticleState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, dataResponse{Data: article})
+}
+
+func (s *Server) markAllRead(w http.ResponseWriter, _ *http.Request) {
+	count, err := s.store.MarkAllRead()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{"markedRead": count}})
 }
 
 func (s *Server) resetSkipped(w http.ResponseWriter, _ *http.Request) {

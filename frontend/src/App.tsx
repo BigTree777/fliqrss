@@ -62,6 +62,7 @@ function App() {
   const [draggedSourceId, setDraggedSourceId] = useState<string | null>(null)
   const [dragOverSourceId, setDragOverSourceId] = useState<string | null>(null)
   const [refreshingSources, setRefreshingSources] = useState(false)
+  const [markingAllRead, setMarkingAllRead] = useState(false)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(() => window.location.hash === '#/tags')
@@ -570,6 +571,24 @@ function App() {
     }
   }
 
+  const markAllArticlesRead = async () => {
+    if (markingAllRead || articleStats.feed === 0) return
+    if (!window.confirm(`${articleStats.feed}件の未読記事をすべて既読にしますか？`)) return
+    setMarkingAllRead(true)
+    try {
+      const result = await api.markAllRead()
+      setMenuOpen(false)
+      setDragX(0)
+      await Promise.all([loadFeed(), refreshStats()])
+      setApiError('')
+      showNotice(`${result.markedRead}件を既読にしました`)
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setMarkingAllRead(false)
+    }
+  }
+
   useEffect(() => {
     void loadData()
   }, [loadData])
@@ -790,6 +809,16 @@ function App() {
         </div>
 
         <div className="header-menu">
+          <button
+            aria-label={markingAllRead ? 'すべての記事を既読にしています' : `すべて既読にする（未読${articleStats.feed}件）`}
+            className="header-mark-all-read-button"
+            disabled={markingAllRead || articleStats.feed === 0}
+            onClick={() => void markAllArticlesRead()}
+            title={markingAllRead ? '既読にしています' : 'すべて既読にする'}
+            type="button"
+          >
+            <Icon name="check" size={20} />
+          </button>
           <button
             aria-label={refreshingSources ? 'ニュースソースを更新中' : 'すべてのニュースソースを更新'}
             className={`header-refresh-button${refreshingSources ? ' is-refreshing' : ''}`}
