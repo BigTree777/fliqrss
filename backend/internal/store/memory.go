@@ -13,27 +13,32 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrConflict      = errors.New("conflict")
-	ErrBadAction     = errors.New("unsupported article action")
-	ErrInvalidCursor = errors.New("invalid cursor")
+	ErrNotFound           = errors.New("not found")
+	ErrConflict           = errors.New("conflict")
+	ErrBadAction          = errors.New("unsupported article action")
+	ErrInvalidCursor      = errors.New("invalid cursor")
+	ErrInvalidSourceOrder = errors.New("source order must contain every source exactly once")
 )
 
 type Memory struct {
-	mu           sync.RWMutex
-	articles     map[string]model.Article
-	articleOrder []string
-	sources      map[string]model.Source
-	sourceOrder  []string
-	tags         map[string]model.Tag
-	tagOrder     []string
+	mu                 sync.RWMutex
+	articles           map[string]model.Article
+	articleOrder       []string
+	articleURLIndex    map[string][]string
+	sourceArticleIndex map[string][]string
+	sources            map[string]model.Source
+	sourceOrder        []string
+	tags               map[string]model.Tag
+	tagOrder           []string
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		articles: make(map[string]model.Article),
-		sources:  make(map[string]model.Source),
-		tags:     make(map[string]model.Tag),
+		articles:           make(map[string]model.Article),
+		articleURLIndex:    make(map[string][]string),
+		sourceArticleIndex: make(map[string][]string),
+		sources:            make(map[string]model.Source),
+		tags:               make(map[string]model.Tag),
 	}
 }
 
@@ -43,11 +48,9 @@ func (s *Memory) ListArticles(filter model.ArticleFilter) []model.Article {
 
 	result := make([]model.Article, 0, len(s.articleOrder))
 	for _, id := range s.articleOrder {
-		article := s.articles[id]
-		source, sourceExists := s.sources[article.SourceID]
-		if sourceExists {
-			article.Source = source.Name
-			article.TagIDs = slices.Clone(source.TagIDs)
+		article := s.articleForRead(id)
+		if article.DuplicateOfID != "" {
+			continue
 		}
 		if filter.SourceID != "" && article.SourceID != filter.SourceID {
 			continue
@@ -112,6 +115,9 @@ func (s *Memory) ArticleStats() model.ArticleStats {
 	}
 	for _, id := range s.articleOrder {
 		article := s.articleForRead(id)
+		if article.DuplicateOfID != "" {
+			continue
+		}
 		if matchesArticleState(article.State, "feed") {
 			stats.Feed++
 			stats.SourceFeedCounts[article.SourceID]++
@@ -145,10 +151,14 @@ func (s *Memory) articleForRead(id string) model.Article {
 		article.TagIDs = slices.Clone(source.TagIDs)
 	}
 	article.Body = slices.Clone(article.Body)
+	article.DuplicateSources = slices.Clone(article.DuplicateSources)
 	return article
 }
 
 func matchesArticleFilter(article model.Article, filter model.ArticleFilter) bool {
+	if article.DuplicateOfID != "" {
+		return false
+	}
 	if filter.SourceID != "" && article.SourceID != filter.SourceID {
 		return false
 	}
@@ -184,16 +194,11 @@ func (s *Memory) GetArticle(id string) (model.Article, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	article, ok := s.articles[id]
+	_, ok := s.articles[id]
 	if !ok {
 		return model.Article{}, ErrNotFound
 	}
-	if source, ok := s.sources[article.SourceID]; ok {
-		article.Source = source.Name
-		article.TagIDs = slices.Clone(source.TagIDs)
-	}
-	article.Body = slices.Clone(article.Body)
-	return article, nil
+	return s.articleForRead(id), nil
 }
 
 func (s *Memory) ApplyArticleAction(id string, action model.ArticleAction) (model.Article, error) {
@@ -212,11 +217,7 @@ func (s *Memory) ApplyArticleAction(id string, action model.ArticleAction) (mode
 	article.State = state
 
 	s.articles[id] = article
-	if source, ok := s.sources[article.SourceID]; ok {
-		article.Source = source.Name
-		article.TagIDs = slices.Clone(source.TagIDs)
-	}
-	return article, nil
+	return s.articleForRead(id), nil
 }
 
 func applyArticleAction(state model.ArticleState, action model.ArticleAction) (model.ArticleState, error) {
@@ -326,40 +327,77 @@ func (s *Memory) CreateSource(name, rawURL, format string) (model.Source, error)
 }
 
 func (s *Memory) UpsertArticles(sourceID, format string, articles []model.Article) (model.Source, int, error) {
-	return s.upsertArticlesAt(sourceID, format, articles, time.Now().UTC())
+	source, added, _, err := s.upsertArticlesAtWithChanges(sourceID, format, articles, time.Now().UTC())
+	return source, added, err
 }
 
 func (s *Memory) upsertArticlesAt(sourceID, format string, articles []model.Article, fetchedAt time.Time) (model.Source, int, error) {
+	source, added, _, err := s.upsertArticlesAtWithChanges(sourceID, format, articles, fetchedAt)
+	return source, added, err
+}
+
+func (s *Memory) upsertArticlesAtWithChanges(sourceID, format string, articles []model.Article, fetchedAt time.Time) (model.Source, int, []model.Article, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	source, ok := s.sources[sourceID]
 	if !ok {
-		return model.Source{}, 0, ErrNotFound
+		return model.Source{}, 0, nil, ErrNotFound
 	}
 	added := 0
+	affectedURLs := make(map[string]struct{})
+	stateOverrides := make(map[string]model.ArticleState)
+	incomingChanges := make([]model.Article, 0, len(articles))
 	for _, article := range articles {
 		article.SourceID = sourceID
 		article.Source = source.Name
+		article.CanonicalURL = canonicalArticleURL(article.URL)
+		article.DuplicateOfID = ""
+		article.DuplicateReason = ""
+		article.DuplicateCount = 0
+		article.DuplicateSources = nil
+		if article.CanonicalURL != "" {
+			if state, exists := s.representativeStateForURLLocked(article.CanonicalURL); exists {
+				stateOverrides[article.CanonicalURL] = state
+			}
+		}
 		if existing, exists := s.articles[article.ID]; exists {
 			article.State = existing.State
+			if existing.CanonicalURL != "" {
+				affectedURLs[existing.CanonicalURL] = struct{}{}
+				if _, captured := stateOverrides[existing.CanonicalURL]; !captured {
+					if state, stateExists := s.representativeStateForURLLocked(existing.CanonicalURL); stateExists {
+						stateOverrides[existing.CanonicalURL] = state
+					}
+				}
+			}
+			if existing.CanonicalURL != article.CanonicalURL {
+				s.removeArticleURLIndexLocked(existing.CanonicalURL, article.ID)
+				s.addArticleURLIndexLocked(article.CanonicalURL, article.ID)
+			}
+			if existing.SourceID != article.SourceID {
+				s.removeSourceArticleIndexLocked(existing.SourceID, article.ID)
+				s.addSourceArticleIndexLocked(article.SourceID, article.ID)
+			}
 			s.articles[article.ID] = article
-			continue
+		} else {
+			s.articles[article.ID] = article
+			s.articleOrder = append(s.articleOrder, article.ID)
+			s.addArticleURLIndexLocked(article.CanonicalURL, article.ID)
+			s.addSourceArticleIndexLocked(article.SourceID, article.ID)
+			added++
 		}
-		s.articles[article.ID] = article
-		s.articleOrder = append(s.articleOrder, article.ID)
-		added++
+		if article.CanonicalURL != "" {
+			affectedURLs[article.CanonicalURL] = struct{}{}
+		}
+		incomingChanges = append(incomingChanges, article)
 	}
 	source.Format = format
 	source.LastFetchedAt = &fetchedAt
-	source.ArticleCount = 0
-	for _, article := range s.articles {
-		if article.SourceID == sourceID {
-			source.ArticleCount++
-		}
-	}
+	source.ArticleCount = len(s.sourceArticleIndex[sourceID])
 	s.sources[sourceID] = source
-	return source, added, nil
+	duplicateChanges := s.reconcileDuplicateURLsLocked(affectedURLs, stateOverrides)
+	return source, added, uniqueArticleChanges(incomingChanges, duplicateChanges), nil
 }
 
 func (s *Memory) UpdateSource(id string, name *string, enabled *bool) (model.Source, error) {
@@ -377,28 +415,83 @@ func (s *Memory) UpdateSource(id string, name *string, enabled *bool) (model.Sou
 		source.Enabled = *enabled
 	}
 	s.sources[id] = source
+	if name != nil {
+		affectedURLs := make(map[string]struct{})
+		for _, articleID := range s.sourceArticleIndex[id] {
+			if article := s.articles[articleID]; article.CanonicalURL != "" {
+				affectedURLs[article.CanonicalURL] = struct{}{}
+			}
+		}
+		s.reconcileDuplicateURLsLocked(affectedURLs, nil)
+	}
 	return source, nil
 }
 
+func (s *Memory) ReorderSources(sourceIDs []string) ([]model.Source, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(sourceIDs) != len(s.sourceOrder) {
+		return nil, ErrInvalidSourceOrder
+	}
+	seen := make(map[string]struct{}, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		if _, exists := s.sources[sourceID]; !exists {
+			return nil, ErrInvalidSourceOrder
+		}
+		if _, duplicate := seen[sourceID]; duplicate {
+			return nil, ErrInvalidSourceOrder
+		}
+		seen[sourceID] = struct{}{}
+	}
+	s.sourceOrder = slices.Clone(sourceIDs)
+
+	result := make([]model.Source, 0, len(s.sourceOrder))
+	for _, sourceID := range s.sourceOrder {
+		source := s.sources[sourceID]
+		source.TagIDs = slices.Clone(source.TagIDs)
+		result = append(result, source)
+	}
+	return result, nil
+}
+
 func (s *Memory) DeleteSource(id string) error {
+	_, err := s.deleteSourceWithChanges(id)
+	return err
+}
+
+func (s *Memory) deleteSourceWithChanges(id string) ([]model.Article, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.sources[id]; !ok {
-		return ErrNotFound
+		return nil, ErrNotFound
+	}
+	affectedURLs := make(map[string]struct{})
+	stateOverrides := make(map[string]model.ArticleState)
+	for _, articleID := range s.sourceArticleIndex[id] {
+		article := s.articles[articleID]
+		if article.CanonicalURL == "" {
+			continue
+		}
+		affectedURLs[article.CanonicalURL] = struct{}{}
+		if article.DuplicateCount > 0 {
+			stateOverrides[article.CanonicalURL] = article.State
+		}
 	}
 	delete(s.sources, id)
 	s.sourceOrder = slices.DeleteFunc(s.sourceOrder, func(candidate string) bool { return candidate == id })
-	for articleID, article := range s.articles {
-		if article.SourceID == id {
-			delete(s.articles, articleID)
-		}
+	for _, articleID := range slices.Clone(s.sourceArticleIndex[id]) {
+		article := s.articles[articleID]
+		s.removeArticleURLIndexLocked(article.CanonicalURL, articleID)
+		s.removeSourceArticleIndexLocked(id, articleID)
+		delete(s.articles, articleID)
 	}
 	s.articleOrder = slices.DeleteFunc(s.articleOrder, func(articleID string) bool {
 		_, exists := s.articles[articleID]
 		return !exists
 	})
-	return nil
+	return s.reconcileDuplicateURLsLocked(affectedURLs, stateOverrides), nil
 }
 
 func (s *Memory) SetSourceTags(id string, tagIDs []string) (model.Source, error) {
@@ -538,16 +631,23 @@ func (s *Memory) findTagByName(name string) (model.Tag, bool) {
 	return model.Tag{}, false
 }
 
-func (s *Memory) replace(tags []model.Tag, sources []model.Source, articles []model.Article) {
+func (s *Memory) replace(tags []model.Tag, sources []model.Source, articles []model.Article) []model.Article {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.articles = make(map[string]model.Article, len(articles))
 	s.articleOrder = make([]string, 0, len(articles))
+	s.articleURLIndex = make(map[string][]string)
+	s.sourceArticleIndex = make(map[string][]string)
 	for _, article := range articles {
 		article.Body = slices.Clone(article.Body)
+		if article.CanonicalURL == "" {
+			article.CanonicalURL = canonicalArticleURL(article.URL)
+		}
 		s.articles[article.ID] = article
 		s.articleOrder = append(s.articleOrder, article.ID)
+		s.addArticleURLIndexLocked(article.CanonicalURL, article.ID)
+		s.addSourceArticleIndexLocked(article.SourceID, article.ID)
 	}
 
 	s.sources = make(map[string]model.Source, len(sources))
@@ -564,6 +664,13 @@ func (s *Memory) replace(tags []model.Tag, sources []model.Source, articles []mo
 		s.tags[tag.ID] = tag
 		s.tagOrder = append(s.tagOrder, tag.ID)
 	}
+	affectedURLs := make(map[string]struct{})
+	for _, article := range s.articles {
+		if article.CanonicalURL != "" {
+			affectedURLs[article.CanonicalURL] = struct{}{}
+		}
+	}
+	return s.reconcileDuplicateURLsLocked(affectedURLs, nil)
 }
 
 func newID(prefix string) string {

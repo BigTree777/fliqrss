@@ -16,6 +16,8 @@ type Repository interface {
 	CreateSource(string, string, string) (model.Source, error)
 	UpsertArticles(string, string, []model.Article) (model.Source, int, error)
 	UpdateSource(string, *string, *bool) (model.Source, error)
+	ReorderSources([]string) ([]model.Source, error)
+	ReconcileDuplicates() error
 	DeleteSource(string) error
 	SetSourceTags(string, []string) (model.Source, error)
 

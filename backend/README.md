@@ -85,6 +85,8 @@ docker compose --profile test run --rm backend-test
 | POST | `/api/v1/sources` | ソース追加 |
 | POST | `/api/v1/sources/import-opml` | OPMLからソースを一括追加 |
 | GET | `/api/v1/sources/export-opml` | ソースとタグをOPMLとして出力 |
+| PUT | `/api/v1/sources/order` | ソースの優先順位を変更 |
+| POST | `/api/v1/sources/refresh` | 有効な全ソースを再取得して重複を再判定 |
 | PATCH | `/api/v1/sources/{id}` | ソース名または取得状態の変更 |
 | DELETE | `/api/v1/sources/{id}` | ソース削除 |
 | POST | `/api/v1/sources/{id}/refresh` | ソースを再取得 |
@@ -122,6 +124,30 @@ docker compose --profile test run --rm backend-test
 
 利用できる操作は`read`, `unread`, `skip`, `save`, `unsave`, `favorite`, `unfavorite`, `delete`, `restore`である.
 
+## 重複記事の検出
+
+異なるニュースソースの記事について, 正規化したURLが一致する場合は重複候補として検出する.
+
+URLの比較ではHTTPとHTTPSの違い, 末尾のスラッシュ, フラグメント, `utm_*`, `fbclid`, `gclid`などの追跡パラメーターを除外する.
+
+同じニュースソース内の記事はこの判定の対象にしない.
+ニュースソース一覧で上にあるソースを優先し, 最上位ソースの記事だけを記事一覧と件数に含める.
+重複記事はPostgreSQLから削除せず, `duplicateOfId`に代表記事のIDを保存して非表示にする.
+代表記事には内部情報として`duplicateCount`と`duplicateSources`を含めるが, 画面には重複件数を表示しない.
+
+記事の取込時は新規または変更された正規化URLだけを再判定する.
+ソースの優先順位を変更しただけでは重複を再判定しない.
+`POST /api/v1/sources/refresh`で有効な全ソースを再取得した後, 保存済みの優先順位を使って全URLグループを再判定する.
+代表記事が切り替わる場合は, 既読, スキップ, 保存, お気に入り, ゴミ箱の状態を新しい代表記事へ移す.
+
+ソース順は全ソースIDを優先順に指定して更新する.
+
+```json
+{
+  "sourceIds": ["src-high", "src-middle", "src-low"]
+}
+```
+
 ## RSS・Atomの登録
 
 ソース名とフィードURLを指定する.
@@ -141,6 +167,12 @@ curl -X POST \
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/sources/{id}/refresh
+```
+
+有効な全ソースを手動で再取得し, 現在のソース順で重複を再判定する.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/sources/refresh
 ```
 
 ## 定期取得

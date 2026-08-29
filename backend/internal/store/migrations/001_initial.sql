@@ -49,3 +49,9 @@ CREATE TABLE IF NOT EXISTS articles (
 );
 
 CREATE INDEX IF NOT EXISTS articles_source_id_index ON articles (source_id);
+
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS canonical_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS duplicate_of_id TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS articles_canonical_url_index ON articles (canonical_url);
+CREATE INDEX IF NOT EXISTS articles_duplicate_of_id_index ON articles (duplicate_of_id);

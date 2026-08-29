@@ -180,19 +180,28 @@ func (s *PostgreSQL) UpsertArticles(sourceID, format string, articles []model.Ar
 		return model.Source{}, 0, err
 	}
 	defer tx.Rollback()
-	for _, article := range articles {
+	preparedArticles := slices.Clone(articles)
+	for index := range preparedArticles {
+		preparedArticles[index].SourceID = sourceID
+		preparedArticles[index].CanonicalURL = canonicalArticleURL(preparedArticles[index].URL)
+		preparedArticles[index].DuplicateOfID = ""
+		preparedArticles[index].DuplicateReason = ""
+		preparedArticles[index].DuplicateCount = 0
+		preparedArticles[index].DuplicateSources = nil
+		article := preparedArticles[index]
 		body, err := json.Marshal(article.Body)
 		if err != nil {
 			return model.Source{}, 0, err
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO articles
-            (id,source_id,source_initials,published_at,read_time,title,url,summary,body,visual_label,visual_theme,is_read,is_skipped,is_saved,is_favorite,is_deleted)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16)
-            ON CONFLICT (id) DO UPDATE SET source_id=EXCLUDED.source_id,source_initials=EXCLUDED.source_initials,published_at=EXCLUDED.published_at,
-            read_time=EXCLUDED.read_time,title=EXCLUDED.title,url=EXCLUDED.url,summary=EXCLUDED.summary,body=EXCLUDED.body,
-            visual_label=EXCLUDED.visual_label,visual_theme=EXCLUDED.visual_theme`,
+			(id,source_id,source_initials,published_at,read_time,title,url,summary,body,visual_label,visual_theme,is_read,is_skipped,is_saved,is_favorite,is_deleted,canonical_url,duplicate_of_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			ON CONFLICT (id) DO UPDATE SET source_id=EXCLUDED.source_id,source_initials=EXCLUDED.source_initials,published_at=EXCLUDED.published_at,
+			read_time=EXCLUDED.read_time,title=EXCLUDED.title,url=EXCLUDED.url,summary=EXCLUDED.summary,body=EXCLUDED.body,
+			visual_label=EXCLUDED.visual_label,visual_theme=EXCLUDED.visual_theme,canonical_url=EXCLUDED.canonical_url`,
 			article.ID, sourceID, article.SourceInitials, article.PublishedAt, article.ReadTime, article.Title, article.URL, article.Summary,
-			string(body), article.VisualLabel, article.VisualTheme, article.State.Read, article.State.Skipped, article.State.Saved, article.State.Favorite, article.State.Deleted)
+			string(body), article.VisualLabel, article.VisualTheme, article.State.Read, article.State.Skipped, article.State.Saved, article.State.Favorite, article.State.Deleted,
+			article.CanonicalURL, article.DuplicateOfID)
 		if err != nil {
 			return model.Source{}, 0, err
 		}
@@ -204,7 +213,14 @@ func (s *PostgreSQL) UpsertArticles(sourceID, format string, articles []model.Ar
 	if err := tx.Commit(); err != nil {
 		return model.Source{}, 0, err
 	}
-	return s.memory.upsertArticlesAt(sourceID, format, articles, fetchedAt)
+	source, added, changes, err := s.memory.upsertArticlesAtWithChanges(sourceID, format, preparedArticles, fetchedAt)
+	if err != nil {
+		return model.Source{}, 0, err
+	}
+	if err := s.persistArticleChanges(changes); err != nil {
+		return model.Source{}, 0, err
+	}
+	return source, added, nil
 }
 
 func (s *PostgreSQL) UpdateSource(id string, name *string, enabled *bool) (model.Source, error) {
@@ -232,6 +248,52 @@ func (s *PostgreSQL) UpdateSource(id string, name *string, enabled *bool) (model
 	return s.memory.UpdateSource(id, name, enabled)
 }
 
+func (s *PostgreSQL) ReorderSources(sourceIDs []string) ([]model.Source, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.memory.ListSources()
+	if len(sourceIDs) != len(current) {
+		return nil, ErrInvalidSourceOrder
+	}
+	known := make(map[string]struct{}, len(current))
+	for _, source := range current {
+		known[source.ID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		if _, exists := known[sourceID]; !exists {
+			return nil, ErrInvalidSourceOrder
+		}
+		if _, duplicate := seen[sourceID]; duplicate {
+			return nil, ErrInvalidSourceOrder
+		}
+		seen[sourceID] = struct{}{}
+	}
+
+	ctx, cancel := s.operationContext()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for priority, sourceID := range sourceIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE sources SET sort_order=$2 WHERE id=$1`, sourceID, priority+1); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.memory.ReorderSources(sourceIDs)
+}
+
+func (s *PostgreSQL) ReconcileDuplicates() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.persistArticleChanges(s.memory.reconcileAllDuplicatesWithChanges())
+}
+
 func (s *PostgreSQL) DeleteSource(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -244,7 +306,11 @@ func (s *PostgreSQL) DeleteSource(id string) error {
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrNotFound
 	}
-	return s.memory.DeleteSource(id)
+	changes, err := s.memory.deleteSourceWithChanges(id)
+	if err != nil {
+		return err
+	}
+	return s.persistArticleChanges(changes)
 }
 
 func (s *PostgreSQL) SetSourceTags(id string, tagIDs []string) (model.Source, error) {
@@ -368,8 +434,8 @@ func (s *PostgreSQL) load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.memory.replace(tags, sources, articles)
-	return nil
+	changes := s.memory.replace(tags, sources, articles)
+	return s.persistArticleChanges(changes)
 }
 
 func (s *PostgreSQL) loadTags(ctx context.Context) ([]model.Tag, error) {
@@ -431,7 +497,7 @@ func (s *PostgreSQL) loadSources(ctx context.Context) ([]model.Source, error) {
 }
 
 func (s *PostgreSQL) loadArticles(ctx context.Context) ([]model.Article, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,source_id,source_initials,published_at,read_time,title,url,summary,body,visual_label,visual_theme,is_read,is_skipped,is_saved,is_favorite,is_deleted FROM articles ORDER BY sort_order`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,source_id,source_initials,published_at,read_time,title,url,summary,body,visual_label,visual_theme,is_read,is_skipped,is_saved,is_favorite,is_deleted,canonical_url,duplicate_of_id FROM articles ORDER BY sort_order`)
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +508,7 @@ func (s *PostgreSQL) loadArticles(ctx context.Context) ([]model.Article, error) 
 		var body []byte
 		if err := rows.Scan(&article.ID, &article.SourceID, &article.SourceInitials, &article.PublishedAt, &article.ReadTime, &article.Title,
 			&article.URL, &article.Summary, &body, &article.VisualLabel, &article.VisualTheme, &article.State.Read, &article.State.Skipped,
-			&article.State.Saved, &article.State.Favorite, &article.State.Deleted); err != nil {
+			&article.State.Saved, &article.State.Favorite, &article.State.Deleted, &article.CanonicalURL, &article.DuplicateOfID); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(body, &article.Body); err != nil {
@@ -451,6 +517,27 @@ func (s *PostgreSQL) loadArticles(ctx context.Context) ([]model.Article, error) 
 		result = append(result, article)
 	}
 	return result, rows.Err()
+}
+
+func (s *PostgreSQL) persistArticleChanges(articles []model.Article) error {
+	if len(articles) == 0 {
+		return nil
+	}
+	ctx, cancel := s.operationContext()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, article := range articles {
+		if _, err := tx.ExecContext(ctx, `UPDATE articles SET canonical_url=$2,duplicate_of_id=$3,is_read=$4,is_skipped=$5,is_saved=$6,is_favorite=$7,is_deleted=$8 WHERE id=$1`,
+			article.ID, article.CanonicalURL, article.DuplicateOfID, article.State.Read, article.State.Skipped, article.State.Saved,
+			article.State.Favorite, article.State.Deleted); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *PostgreSQL) operationContext() (context.Context, context.CancelFunc) {

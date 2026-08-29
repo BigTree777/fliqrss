@@ -73,6 +73,30 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	secondSource, err := repository.CreateSource("Higher Priority Feed", "https://higher.example/feed.xml", "rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateArticle := article
+	duplicateArticle.ID = "higher-priority-article"
+	duplicateArticle.URL = "http://example.com/articles/1?utm_source=higher"
+	if _, added, err := repository.UpsertArticles(secondSource.ID, "rss", []model.Article{duplicateArticle}); err != nil || added != 1 {
+		t.Fatalf("upsert duplicate article: added=%d, err=%v", added, err)
+	}
+	if _, err := repository.ReorderSources([]string{secondSource.ID, source.ID}); err != nil {
+		t.Fatal(err)
+	}
+	visible := repository.ListArticles(model.ArticleFilter{State: "all"})
+	if len(visible) != 1 || visible[0].ID != article.ID {
+		t.Fatalf("reorder changed representative before refresh: %+v", visible)
+	}
+	if err := repository.ReconcileDuplicates(); err != nil {
+		t.Fatal(err)
+	}
+	visible = repository.ListArticles(model.ArticleFilter{State: "all"})
+	if len(visible) != 1 || visible[0].ID != duplicateArticle.ID || !visible[0].State.Saved {
+		t.Fatalf("visible representative before reload: %+v", visible)
+	}
 	if err := repository.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -83,15 +107,20 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	}
 	defer repository.Close()
 
-	restored, err := repository.GetArticle(article.ID)
-	if err != nil {
-		t.Fatal(err)
+	visible = repository.ListArticles(model.ArticleFilter{State: "all"})
+	if len(visible) != 1 || visible[0].ID != duplicateArticle.ID {
+		t.Fatalf("visible representative after reload: %+v", visible)
 	}
+	restored := visible[0]
 	if !restored.State.Read || !restored.State.Skipped || !restored.State.Saved || !restored.State.Favorite {
 		t.Fatalf("article state was not persisted: %+v", restored.State)
 	}
 	if len(restored.Body) != 2 || restored.Body[1] != "本文2" {
 		t.Fatalf("article body was not persisted: %#v", restored.Body)
+	}
+	restoredSources := repository.ListSources()
+	if len(restoredSources) != 2 || restoredSources[0].ID != secondSource.ID || restoredSources[1].ID != source.ID {
+		t.Fatalf("source order was not persisted: %+v", restoredSources)
 	}
 	restoredSource, err := repository.GetSource(source.ID)
 	if err != nil {
@@ -103,7 +132,7 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	if count, err := repository.ResetSkipped(); err != nil || count != 1 {
 		t.Fatalf("reset skipped: count=%d, err=%v", count, err)
 	}
-	restored, err = repository.GetArticle(article.ID)
+	restored, err = repository.GetArticle(duplicateArticle.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

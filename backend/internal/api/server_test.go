@@ -183,6 +183,32 @@ func TestSourceAndTagWorkflow(t *testing.T) {
 	}
 }
 
+func TestReorderSources(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
+	original := fixture.memory.ListSources()
+	requested := make([]string, len(original))
+	for index := range original {
+		requested[index] = original[len(original)-1-index].ID
+	}
+
+	response := performRequest(t, server.Handler(), http.MethodPut, "/api/v1/sources/order", map[string][]string{"sourceIds": requested})
+	if response.Code != http.StatusOK {
+		t.Fatalf("reorder status = %d, want %d", response.Code, http.StatusOK)
+	}
+	reordered := decodeData[[]model.Source](t, response)
+	for index, sourceID := range requested {
+		if reordered[index].ID != sourceID {
+			t.Fatalf("reordered sources = %+v", reordered)
+		}
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodPut, "/api/v1/sources/order", map[string][]string{"sourceIds": {requested[0]}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid reorder status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
 func TestDeletingSourceRemovesItsArticles(t *testing.T) {
 	fixture := newTestFixture(t)
 	server := NewServer(fixture.memory, "")
@@ -280,6 +306,31 @@ func TestRefreshSource(t *testing.T) {
 	}
 	if second.Data.AddedArticles != 0 {
 		t.Fatalf("second refresh added = %d, want 0", second.Data.AddedArticles)
+	}
+}
+
+func TestRefreshAllSources(t *testing.T) {
+	fixture := newTestFixture(t)
+	loader := staticFeedLoader{document: feed.Document{
+		Format: "rss",
+		Entries: []feed.Entry{{
+			ID: "shared-entry", Title: "Shared article", Link: "https://news.example.test/shared", Summary: "Summary",
+		}},
+	}}
+	server := NewServerWithFeedLoader(fixture.memory, "", loader)
+
+	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/refresh", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("refresh all status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	result := decodeData[map[string]int](t, response)
+	if result["sources"] != 6 || result["refreshed"] != 6 || result["added"] != 6 || result["failed"] != 0 {
+		t.Fatalf("refresh all response = %+v", result)
+	}
+
+	articles := fixture.memory.ListArticles(model.ArticleFilter{State: "all"})
+	if len(articles) != 7 {
+		t.Fatalf("visible articles after duplicate reconciliation = %d, want 7", len(articles))
 	}
 }
 

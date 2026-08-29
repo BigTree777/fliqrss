@@ -11,20 +11,25 @@ type ArticleState struct {
 }
 
 type Article struct {
-	ID             string       `json:"id"`
-	SourceID       string       `json:"sourceId"`
-	Source         string       `json:"source"`
-	SourceInitials string       `json:"sourceInitials"`
-	PublishedAt    string       `json:"publishedAt"`
-	ReadTime       int          `json:"readTime"`
-	Title          string       `json:"title"`
-	URL            string       `json:"url,omitempty"`
-	Summary        string       `json:"summary"`
-	Body           []string     `json:"body"`
-	VisualLabel    string       `json:"visualLabel"`
-	VisualTheme    string       `json:"visualTheme"`
-	TagIDs         []string     `json:"tagIds"`
-	State          ArticleState `json:"state"`
+	ID               string       `json:"id"`
+	SourceID         string       `json:"sourceId"`
+	Source           string       `json:"source"`
+	SourceInitials   string       `json:"sourceInitials"`
+	PublishedAt      string       `json:"publishedAt"`
+	ReadTime         int          `json:"readTime"`
+	Title            string       `json:"title"`
+	URL              string       `json:"url,omitempty"`
+	Summary          string       `json:"summary"`
+	Body             []string     `json:"body"`
+	VisualLabel      string       `json:"visualLabel"`
+	VisualTheme      string       `json:"visualTheme"`
+	TagIDs           []string     `json:"tagIds"`
+	State            ArticleState `json:"state"`
+	CanonicalURL     string       `json:"-"`
+	DuplicateOfID    string       `json:"duplicateOfId,omitempty"`
+	DuplicateReason  string       `json:"duplicateReason,omitempty"`
+	DuplicateCount   int          `json:"duplicateCount,omitempty"`
+	DuplicateSources []string     `json:"duplicateSources,omitempty"`
 }
 
 type Source struct {

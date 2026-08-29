@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"fliqrss/backend/internal/collector"
 	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/model"
 	"fliqrss/backend/internal/opml"
@@ -71,6 +72,8 @@ func NewServerWithFeedLoader(repository store.Repository, allowedOrigin string, 
 	mux.HandleFunc("POST /api/v1/sources", s.createSource)
 	mux.HandleFunc("POST /api/v1/sources/import-opml", s.importOPML)
 	mux.HandleFunc("GET /api/v1/sources/export-opml", s.exportOPML)
+	mux.HandleFunc("PUT /api/v1/sources/order", s.reorderSources)
+	mux.HandleFunc("POST /api/v1/sources/refresh", s.refreshAllSources)
 	mux.HandleFunc("PATCH /api/v1/sources/{id}", s.updateSource)
 	mux.HandleFunc("DELETE /api/v1/sources/{id}", s.deleteSource)
 	mux.HandleFunc("POST /api/v1/sources/{id}/refresh", s.refreshSource)
@@ -498,6 +501,25 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dataResponse{Data: source})
 }
 
+func (s *Server) reorderSources(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		SourceIDs []string `json:"sourceIds"`
+	}
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	if request.SourceIDs == nil {
+		writeError(w, http.StatusBadRequest, "invalid_source_order", "sourceIds is required")
+		return
+	}
+	sources, err := s.store.ReorderSources(request.SourceIDs)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: sources})
+}
+
 func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteSource(r.PathValue("id")); err != nil {
 		writeStoreError(w, err)
@@ -529,6 +551,24 @@ func (s *Server) refreshSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]any{
 		"source":        source,
 		"addedArticles": added,
+	}})
+}
+
+func (s *Server) refreshAllSources(w http.ResponseWriter, r *http.Request) {
+	result := collector.New(s.store, s.feedLoader, collector.DefaultConcurrency, nil).RefreshAll(r.Context())
+	if err := r.Context().Err(); err != nil {
+		writeError(w, http.StatusRequestTimeout, "refresh_cancelled", "source refresh was cancelled")
+		return
+	}
+	if err := s.store.ReconcileDuplicates(); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{
+		"sources":   result.Sources,
+		"refreshed": result.Refreshed,
+		"added":     result.Added,
+		"failed":    result.Failed,
 	}})
 }
 
@@ -647,6 +687,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_action", err.Error())
 	case errors.Is(err, store.ErrInvalidCursor):
 		writeError(w, http.StatusBadRequest, "invalid_cursor", "cursor is no longer valid")
+	case errors.Is(err, store.ErrInvalidSourceOrder):
+		writeError(w, http.StatusBadRequest, "invalid_source_order", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", "an unexpected error occurred")
 	}
