@@ -9,6 +9,7 @@ type TagFilter = string
 type FilterMode = 'source' | 'tag'
 type SwipeAction = 'skip' | 'save'
 type LibraryMode = 'favorite' | 'saved' | 'deleted'
+type ColorTheme = 'light' | 'dark'
 
 const ALL_TAGS = '__all__'
 const UNTAGGED = '__untagged__'
@@ -17,6 +18,21 @@ const SWIPE_THRESHOLD = 92
 const FEED_PAGE_SIZE = 20
 const PREFETCH_THRESHOLD = 5
 const LIBRARY_PAGE_SIZE = 50
+const THEME_STORAGE_KEY = 'fliqrss.theme'
+
+function storedTheme(): ColorTheme | null {
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY)
+    return value === 'light' || value === 'dark' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function initialTheme(): ColorTheme {
+  if (document.documentElement.dataset.theme === 'dark') return 'dark'
+  return 'light'
+}
 
 const emptyArticleStats: ArticleStats = {
   feed: 0,
@@ -37,6 +53,7 @@ function libraryModeFromHash(): LibraryMode | null {
 }
 
 function App() {
+  const [theme, setTheme] = useState<ColorTheme>(initialTheme)
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
   const [source, setSource] = useState(ALL_SOURCES)
   const [articles, setArticles] = useState<Article[]>([])
@@ -88,6 +105,36 @@ function App() {
   const opmlInput = useRef<HTMLInputElement | null>(null)
   const feedRequestID = useRef(0)
   const libraryRequestID = useRef(0)
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.theme = theme
+    root.style.colorScheme = theme
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      theme === 'dark' ? '#101713' : '#f4f1e9',
+    )
+  }, [theme])
+
+  useEffect(() => {
+    if (storedTheme()) return
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
+    const syncSystemTheme = (event: MediaQueryListEvent) => {
+      if (!storedTheme()) setTheme(event.matches ? 'dark' : 'light')
+    }
+    systemTheme.addEventListener('change', syncSystemTheme)
+    return () => systemTheme.removeEventListener('change', syncSystemTheme)
+  }, [])
+
+  const toggleTheme = () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark'
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme)
+    } catch {
+      // The selected theme still applies for this session when storage is unavailable.
+    }
+    setTheme(nextTheme)
+  }
   const tagIdsForSource = useCallback((sourceId: string) => (
     managedSources.find((item) => item.id === sourceId)?.tagIds ?? []
   ), [managedSources])
@@ -907,6 +954,19 @@ function App() {
                   <span>ゴミ箱</span>
                   <strong>{articleStats.deleted}</strong>
                 </a>
+                <span className="main-menu-divider" />
+                <button
+                  aria-label={`${theme === 'dark' ? 'ライト' : 'ダーク'}モードに切り替える`}
+                  aria-pressed={theme === 'dark'}
+                  className="theme-toggle"
+                  onClick={toggleTheme}
+                  title={`${theme === 'dark' ? 'ライト' : 'ダーク'}モードに切り替える`}
+                  type="button"
+                >
+                  <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={19} />
+                  <span>{theme === 'dark' ? 'ライトモード' : 'ダークモード'}</span>
+                  <strong>{theme === 'dark' ? 'ON' : 'OFF'}</strong>
+                </button>
               </nav>
             </>
           )}

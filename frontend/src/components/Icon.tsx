@@ -12,12 +12,14 @@ export type IconName =
   | 'download'
   | 'edit'
   | 'menu'
+  | 'moon'
   | 'pause'
   | 'play'
   | 'plus'
   | 'refresh'
   | 'rss'
   | 'star'
+  | 'sun'
   | 'tag'
   | 'trash'
   | 'upload'
@@ -39,12 +41,14 @@ const paths: Record<IconName, React.ReactNode> = {
   download: <path d="M12 3v12M7 10l5 5 5-5M4 20h16" />,
   edit: <><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /><path d="m14.5 7.5 3 3" /></>,
   menu: <path d="M5 8h14M5 16h14" />,
+  moon: <path d="M20.5 14.4A8.5 8.5 0 0 1 9.6 3.5 8.5 8.5 0 1 0 20.5 14.4Z" />,
   pause: <path d="M8 5v14M16 5v14" />,
   play: <path d="m8 5 11 7-11 7V5Z" />,
   plus: <path d="M12 5v14M5 12h14" />,
   refresh: <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" />,
   rss: <><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14" /><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none" /></>,
   star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" /></>,
   tag: <path d="M20 13 13 20 4 11V4h7l9 9ZM8 8h.01" />,
   trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>,
   upload: <path d="M12 21V9M7 14l5-5 5 5M4 4h16" />,
