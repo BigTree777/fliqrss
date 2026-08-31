@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEventHandler } from 'react'
-import type { Article } from '../types/article'
+import type { Article, Tag } from '../types/article'
 import { Icon } from './Icon'
 
 interface ArticleCardProps {
   article: Article
-  tagLabels: string[]
+  tags: Tag[]
+  tagIds: string[]
   dragX: number
   dragging: boolean
   expanded: boolean
@@ -14,6 +15,8 @@ interface ArticleCardProps {
   onExpandedChange: (expanded: boolean) => void
   onVisit: () => void
   onToggleFavorite: () => void
+  onToggleTag: (tagId: string) => Promise<void>
+  onCreateTag: (name: string) => Promise<boolean>
   onPointerDown: PointerEventHandler<HTMLElement>
   onPointerCancel: PointerEventHandler<HTMLElement>
   onPointerMove: PointerEventHandler<HTMLElement>
@@ -22,7 +25,8 @@ interface ArticleCardProps {
 
 export function ArticleCard({
   article,
-  tagLabels,
+  tags,
+  tagIds,
   dragX,
   dragging,
   expanded,
@@ -31,6 +35,8 @@ export function ArticleCard({
   onExpandedChange,
   onVisit,
   onToggleFavorite,
+  onToggleTag,
+  onCreateTag,
   onPointerDown,
   onPointerCancel,
   onPointerMove,
@@ -38,9 +44,31 @@ export function ArticleCard({
 }: ArticleCardProps) {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const [hasOverflow, setHasOverflow] = useState(false)
+  const [tagPickerOpen, setTagPickerOpen] = useState(false)
+  const [tagSearch, setTagSearch] = useState('')
+  const [createTagDialogOpen, setCreateTagDialogOpen] = useState(false)
+  const [newTagName, setNewTagName] = useState('')
+  const [updatingTagId, setUpdatingTagId] = useState<string | null>(null)
+  const [creatingTag, setCreatingTag] = useState(false)
   const rotation = Math.max(-8, Math.min(8, dragX / 32))
   const saveOpacity = Math.min(1, Math.max(0, dragX / 90))
   const skipOpacity = Math.min(1, Math.max(0, -dragX / 90))
+  const visibleTags = useMemo(() => {
+    const query = tagSearch.trim().toLocaleLowerCase('ja')
+    return tags
+      .filter((tag) => !query || tag.name.toLocaleLowerCase('ja').includes(query))
+      .sort((left, right) => {
+        if (left.usageCount !== right.usageCount) return right.usageCount - left.usageCount
+        const leftUsedAt = left.lastUsedAt ? Date.parse(left.lastUsedAt) : 0
+        const rightUsedAt = right.lastUsedAt ? Date.parse(right.lastUsedAt) : 0
+        if (leftUsedAt !== rightUsedAt) return rightUsedAt - leftUsedAt
+        return left.name.localeCompare(right.name, 'ja')
+      })
+  }, [tagSearch, tags])
+  const normalizedNewTagName = newTagName.trim().toLocaleLowerCase('ja')
+  const tagNameAlreadyExists = Boolean(normalizedNewTagName) && tags.some(
+    (tag) => tag.name.trim().toLocaleLowerCase('ja') === normalizedNewTagName,
+  )
 
   useLayoutEffect(() => {
     const preview = previewRef.current
@@ -61,6 +89,46 @@ export function ArticleCard({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [expanded, onExpandedChange])
+
+  useEffect(() => {
+    if (!tagPickerOpen && !createTagDialogOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (createTagDialogOpen) {
+        setCreateTagDialogOpen(false)
+      } else {
+        setTagPickerOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [createTagDialogOpen, tagPickerOpen])
+
+  const toggleTag = async (tagId: string) => {
+    if (updatingTagId) return
+    setUpdatingTagId(tagId)
+    try {
+      await onToggleTag(tagId)
+    } finally {
+      setUpdatingTagId(null)
+    }
+  }
+
+  const createTag = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = newTagName.trim()
+    if (!name || tagNameAlreadyExists || creatingTag) return
+    setCreatingTag(true)
+    try {
+      if (await onCreateTag(name)) {
+        setTagSearch('')
+        setNewTagName('')
+        setCreateTagDialogOpen(false)
+      }
+    } finally {
+      setCreatingTag(false)
+    }
+  }
 
   const articleTitle = article.url ? (
     <a
@@ -104,6 +172,7 @@ export function ArticleCard({
             className="card-icon-button card-icon-button--delete"
             onClick={onDelete}
             onPointerDown={(event) => event.stopPropagation()}
+            title="削除記事一覧へ移動"
             type="button"
           >
             <Icon name="trash" size={24} />
@@ -114,6 +183,7 @@ export function ArticleCard({
             className={`card-icon-button card-icon-button--favorite ${isFavorite ? 'is-active' : ''}`}
             onClick={onToggleFavorite}
             onPointerDown={(event) => event.stopPropagation()}
+            title={isFavorite ? 'お気に入りから外す' : 'お気に入りに追加'}
             type="button"
           >
             <Icon name="star" size={24} />
@@ -126,8 +196,135 @@ export function ArticleCard({
           <span>{article.publishedAt}</span>
         </div>
 
-        <div className="article-tags">
-          {(tagLabels.length ? tagLabels : ['タグなし']).map((tag) => <span key={tag}>{tag}</span>)}
+        <div className="article-tag-control" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="article-tags" aria-label="設定中のタグ">
+            {tags.filter((tag) => tagIds.includes(tag.id)).map((tag) => (
+              <span className="article-tag-chip" key={tag.id}>
+                {tag.name}
+                <button
+                  aria-label={`${tag.name}を削除`}
+                  disabled={Boolean(updatingTagId)}
+                  onClick={() => void toggleTag(tag.id)}
+                  title={`${tag.name}を削除`}
+                  type="button"
+                >
+                  <Icon name="close" size={11} />
+                </button>
+              </span>
+            ))}
+            {!tagIds.length && <em>タグなし</em>}
+            <button
+              aria-expanded={tagPickerOpen}
+              aria-label="タグを追加"
+              className="article-tag-picker-toggle"
+              onClick={() => {
+                setTagSearch('')
+                setTagPickerOpen((current) => !current)
+              }}
+              title="タグを追加"
+              type="button"
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+          {tagPickerOpen && (
+            <>
+              <button aria-label="タグ一覧を閉じる" className="tag-picker-scrim" onClick={() => setTagPickerOpen(false)} type="button" />
+              <div className="tag-picker article-tag-picker" role="dialog" aria-label={`${article.source}へ割り当てるタグ`}>
+                <div className="tag-picker-heading">
+                  <strong>タグを選択</strong>
+                  <button aria-label="閉じる" onClick={() => setTagPickerOpen(false)} title="閉じる" type="button"><Icon name="close" size={16} /></button>
+                </div>
+                <label className="tag-picker-search">
+                  <span>タグを検索</span>
+                  <input
+                    autoFocus
+                    autoComplete="off"
+                    data-1p-ignore="true"
+                    onChange={(event) => setTagSearch(event.target.value)}
+                    placeholder="タグ名を入力"
+                    type="search"
+                    value={tagSearch}
+                  />
+                </label>
+                <button
+                  className="tag-picker-create"
+                  disabled={creatingTag || Boolean(updatingTagId)}
+                  aria-label="新しいタグを作成"
+                  onClick={() => {
+                    setNewTagName(tagSearch.trim())
+                    setCreateTagDialogOpen(true)
+                  }}
+                  title="新しいタグを作成"
+                  type="button"
+                >
+                  <Icon name="plus" size={16} />
+                </button>
+                <div className="tag-picker-list">
+                  {visibleTags.map((tag) => {
+                    const selected = tagIds.includes(tag.id)
+                    return (
+                      <label
+                        className={selected ? 'is-active' : ''}
+                        key={tag.id}
+                      >
+                        <input
+                          checked={selected}
+                          disabled={Boolean(updatingTagId)}
+                          onChange={() => void toggleTag(tag.id)}
+                          type="checkbox"
+                        />
+                        <span aria-hidden="true">{selected ? <Icon name="check" size={11} /> : null}</span>
+                        {tag.name}
+                      </label>
+                    )
+                  })}
+                  {!tags.length && <p>設定可能なタグがありません.</p>}
+                  {Boolean(tags.length && !visibleTags.length) && <p>一致するタグがありません.</p>}
+                </div>
+              </div>
+            </>
+          )}
+          {createTagDialogOpen && (
+            <>
+              <button
+                aria-label="新しいタグの作成をキャンセル"
+                className="tag-create-dialog-backdrop"
+                onClick={() => setCreateTagDialogOpen(false)}
+                type="button"
+              />
+              <form
+                aria-label="新しいタグを作成"
+                aria-modal="true"
+                className="tag-create-dialog"
+                onSubmit={(event) => void createTag(event)}
+                role="dialog"
+              >
+                <div className="tag-create-dialog-heading">
+                  <strong>新しいタグを作成</strong>
+                  <button aria-label="閉じる" onClick={() => setCreateTagDialogOpen(false)} title="閉じる" type="button"><Icon name="close" size={16} /></button>
+                </div>
+                <label htmlFor={`new-article-tag-${article.id}`}>タグ名</label>
+                <input
+                  autoFocus
+                  autoComplete="off"
+                  data-1p-ignore="true"
+                  id={`new-article-tag-${article.id}`}
+                  onChange={(event) => setNewTagName(event.target.value)}
+                  placeholder="タグ名を入力"
+                  type="text"
+                  value={newTagName}
+                />
+                {tagNameAlreadyExists && <p>同じ名前のタグが既にあります.</p>}
+                <div className="tag-create-dialog-actions">
+                  <button aria-label="キャンセル" disabled={creatingTag} onClick={() => setCreateTagDialogOpen(false)} title="キャンセル" type="button"><Icon name="close" size={16} /></button>
+                  <button aria-label={creatingTag ? '作成中' : '作成'} disabled={!newTagName.trim() || tagNameAlreadyExists || creatingTag} title={creatingTag ? '作成中' : '作成'} type="submit">
+                    <Icon name="plus" size={16} />
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
         </div>
         <h2>{articleTitle}</h2>
         <div className={`article-excerpt article-excerpt--preview${hasOverflow ? ' is-overflowing' : ''}`} ref={previewRef}>
@@ -136,13 +333,15 @@ export function ArticleCard({
 
         {hasOverflow && (
           <button
+            aria-label="記事の続きを読む"
             aria-expanded={expanded}
             className="read-more-button"
             onClick={() => onExpandedChange(true)}
             onPointerDown={(event) => event.stopPropagation()}
+            title="続きを読む"
             type="button"
           >
-            続きを読む
+            <Icon name="expand" size={18} />
           </button>
         )}
 
@@ -161,7 +360,7 @@ export function ArticleCard({
         >
           <div className="article-detail-heading">
             <span>{article.source}</span>
-            <button autoFocus onClick={() => onExpandedChange(false)} type="button">閉じる</button>
+            <button aria-label="閉じる" autoFocus onClick={() => onExpandedChange(false)} title="閉じる" type="button"><Icon name="close" size={17} /></button>
           </div>
           <div className="article-detail-scroll">
             <h2>{articleTitle}</h2>

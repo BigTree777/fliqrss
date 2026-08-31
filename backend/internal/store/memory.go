@@ -521,8 +521,14 @@ func (s *Memory) SetSourceTags(id string, tagIDs []string) (model.Source, error)
 	}
 	unique := make([]string, 0, len(tagIDs))
 	seen := make(map[string]struct{}, len(tagIDs))
+	previous := make(map[string]struct{}, len(source.TagIDs))
+	for _, tagID := range source.TagIDs {
+		previous[tagID] = struct{}{}
+	}
+	usedAt := time.Now().UTC()
 	for _, tagID := range tagIDs {
-		if _, ok := s.tags[tagID]; !ok {
+		tag, ok := s.tags[tagID]
+		if !ok {
 			return model.Source{}, ErrNotFound
 		}
 		if _, exists := seen[tagID]; exists {
@@ -530,6 +536,10 @@ func (s *Memory) SetSourceTags(id string, tagIDs []string) (model.Source, error)
 		}
 		seen[tagID] = struct{}{}
 		unique = append(unique, tagID)
+		if _, alreadyAssigned := previous[tagID]; !alreadyAssigned {
+			tag.LastUsedAt = &usedAt
+			s.tags[tagID] = tag
+		}
 	}
 	source.TagIDs = unique
 	s.sources[id] = source
@@ -540,9 +550,17 @@ func (s *Memory) ListTags() []model.Tag {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	usageCounts := make(map[string]int, len(s.tags))
+	for _, source := range s.sources {
+		for _, tagID := range source.TagIDs {
+			usageCounts[tagID]++
+		}
+	}
 	result := make([]model.Tag, 0, len(s.tagOrder))
 	for _, id := range s.tagOrder {
-		result = append(result, s.tags[id])
+		tag := s.tags[id]
+		tag.UsageCount = usageCounts[id]
+		result = append(result, tag)
 	}
 	return result
 }

@@ -393,7 +393,11 @@ function App() {
     if (!editingTagId || !name) return
     try {
       const updated = await api.updateTag(editingTagId, name)
-      setManagedTags((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setManagedTags((current) => current.map((item) => item.id === updated.id ? {
+        ...updated,
+        usageCount: item.usageCount,
+        lastUsedAt: item.lastUsedAt,
+      } : item))
       setEditingTagId(null)
       setApiError('')
       showNotice('タグ名を変更しました')
@@ -441,10 +445,43 @@ function App() {
       setLibraryArticles((current) => current.map((item) => (
         item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
       )))
-      await Promise.all([loadFeed(), refreshStats()])
+      const tagChangeAffectsFeed = filterMode === 'tag' && (tag === UNTAGGED || tag === tagId)
+      const [nextTags] = await Promise.all([
+        api.listTags(),
+        tagChangeAffectsFeed ? loadFeed() : Promise.resolve(),
+        refreshStats(),
+      ])
+      setManagedTags(nextTags)
       setApiError('')
     } catch (error) {
       showApiError(error)
+    }
+  }
+
+  const createAndAssignSourceTag = async (targetSource: Source, name: string) => {
+    try {
+      const created = await api.createTag(name)
+      const updated = await api.setSourceTags(targetSource.id, [...targetSource.tagIds, created.id])
+      setManagedSources((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setArticles((current) => current.map((item) => (
+        item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
+      )))
+      setLibraryArticles((current) => current.map((item) => (
+        item.sourceId === updated.id ? { ...item, tagIds: updated.tagIds } : item
+      )))
+      const tagChangeAffectsFeed = filterMode === 'tag' && tag === UNTAGGED
+      const [nextTags] = await Promise.all([
+        api.listTags(),
+        tagChangeAffectsFeed ? loadFeed() : Promise.resolve(),
+        refreshStats(),
+      ])
+      setManagedTags(nextTags)
+      setApiError('')
+      showNotice('タグを作成して追加しました')
+      return true
+    } catch (error) {
+      showApiError(error)
+      return false
     }
   }
 
@@ -835,6 +872,7 @@ function App() {
             aria-label={menuOpen ? 'メニューを閉じる' : 'メニューを開く'}
             className={`menu-toggle ${menuOpen ? 'is-open' : ''}`}
             onClick={() => setMenuOpen((current) => !current)}
+            title={menuOpen ? 'メニューを閉じる' : 'メニューを開く'}
             type="button"
           >
             <Icon name={menuOpen ? 'close' : 'menu'} size={22} />
@@ -843,32 +881,32 @@ function App() {
             <>
               <button aria-label="メニューを閉じる" className="menu-scrim" onClick={() => setMenuOpen(false)} type="button" />
               <nav aria-label="メインメニュー" className="main-menu" id="main-menu">
-                <button className={sourceManagerOpen ? 'is-active' : ''} onClick={navigateToSources} type="button">
+                <a className={sourceManagerOpen ? 'is-active' : ''} href="#/sources" onClick={(event) => { event.preventDefault(); navigateToSources() }}>
                   <Icon name="rss" size={19} />
                   <span>ソース</span>
                   <strong>{managedSources.length}</strong>
-                </button>
-                <button className={tagManagerOpen ? 'is-active' : ''} onClick={navigateToTags} type="button">
+                </a>
+                <a className={tagManagerOpen ? 'is-active' : ''} href="#/tags" onClick={(event) => { event.preventDefault(); navigateToTags() }}>
                   <Icon name="tag" size={19} />
                   <span>タグ</span>
                   <strong>{managedTags.length}</strong>
-                </button>
+                </a>
                 <span className="main-menu-divider" />
-                <button className={libraryMode === 'favorite' ? 'is-active' : ''} onClick={() => navigateToLibrary('favorite')} type="button">
+                <a className={libraryMode === 'favorite' ? 'is-active' : ''} href="#/favorites" onClick={(event) => { event.preventDefault(); navigateToLibrary('favorite') }}>
                   <Icon name="star" size={19} />
                   <span>お気に入り</span>
                   <strong>{articleStats.favorite}</strong>
-                </button>
-                <button className={libraryMode === 'saved' ? 'is-active' : ''} onClick={() => navigateToLibrary('saved')} type="button">
+                </a>
+                <a className={libraryMode === 'saved' ? 'is-active' : ''} href="#/saved" onClick={(event) => { event.preventDefault(); navigateToLibrary('saved') }}>
                   <Icon name="bookmark" size={19} />
                   <span>あとで見る</span>
                   <strong>{articleStats.saved}</strong>
-                </button>
-                <button className={libraryMode === 'deleted' ? 'is-active' : ''} onClick={() => navigateToLibrary('deleted')} type="button">
+                </a>
+                <a className={libraryMode === 'deleted' ? 'is-active' : ''} href="#/deleted" onClick={(event) => { event.preventDefault(); navigateToLibrary('deleted') }}>
                   <Icon name="trash" size={19} />
                   <span>ゴミ箱</span>
                   <strong>{articleStats.deleted}</strong>
-                </button>
+                </a>
               </nav>
             </>
           )}
@@ -878,15 +916,15 @@ function App() {
       {apiError && (
         <div className="api-error" role="alert">
           <span>{apiError}</span>
-          <button onClick={() => void Promise.all([loadData(), loadFeed()])} type="button">再試行</button>
+          <button aria-label="再試行" onClick={() => void Promise.all([loadData(), loadFeed()])} title="再試行" type="button"><Icon name="refresh" size={17} /></button>
         </div>
       )}
 
       {sourceManagerOpen ? (
         <main className="category-page" id="top">
           <div className="library-page-heading">
-            <button className="back-to-reader" onClick={navigateToReader} type="button">
-              <Icon name="arrow-left" size={19} /> 戻る
+            <button aria-label="戻る" className="back-to-reader" onClick={navigateToReader} title="戻る" type="button">
+              <Icon name="arrow-left" size={19} />
             </button>
             <p className="eyebrow">SOURCE SETTINGS</p>
             <h1>ニュースソース</h1>
@@ -901,8 +939,8 @@ function App() {
               <h2 id="opml-export-heading">データ出力</h2>
               <p>登録中のソースとタグを, OPMLファイルとして保存します.</p>
             </div>
-            <button disabled={exportingOPML} onClick={() => void exportOPML()} type="button">
-              {exportingOPML ? '出力中' : 'OPML出力'}
+            <button aria-label={exportingOPML ? 'OPMLを出力中' : 'OPMLを出力'} disabled={exportingOPML} onClick={() => void exportOPML()} title={exportingOPML ? '出力中' : 'OPML出力'} type="button">
+              <Icon name="download" size={18} />
             </button>
           </section>
 
@@ -930,8 +968,8 @@ function App() {
                 value={newSourceUrl}
               />
             </div>
-            <button className="source-add-button" disabled={pending || !newSourceName.trim() || !newSourceUrl.trim()} type="submit">
-              {pending ? '取得中' : '追加'}
+            <button aria-label={pending ? 'ニュースソースを取得中' : 'ニュースソースを追加'} className="source-add-button" disabled={pending || !newSourceName.trim() || !newSourceUrl.trim()} title={pending ? '取得中' : '追加'} type="submit">
+              <Icon name="plus" size={18} />
             </button>
           </form>
 
@@ -955,8 +993,8 @@ function App() {
                   type="file"
                 />
               </label>
-              <button disabled={!opmlFile || importingOPML} type="submit">
-                {importingOPML ? '取込中' : '取込'}
+              <button aria-label={importingOPML ? 'OPMLを取込中' : 'OPMLを取り込む'} disabled={!opmlFile || importingOPML} title={importingOPML ? '取込中' : '取込'} type="submit">
+                <Icon name="upload" size={18} />
               </button>
             </form>
             {opmlResult && (
@@ -1000,6 +1038,7 @@ function App() {
                       event.dataTransfer.setData('text/plain', item.id)
                       setDraggedSourceId(item.id)
                     }}
+                    title={`${item.name}を並び替え`}
                     type="button"
                   ><Icon name="drag-handle" size={27} /></button>
                 </div>
@@ -1023,9 +1062,10 @@ function App() {
                       aria-label={`${item.name}のタグを設定`}
                       className="tag-picker-toggle"
                       onClick={() => setOpenTagPickerSourceId((current) => current === item.id ? null : item.id)}
+                      title={`${item.name}のタグを設定`}
                       type="button"
                     >
-                      +
+                      <Icon name="plus" size={14} />
                     </button>
                     {openTagPickerSourceId === item.id && (
                       <>
@@ -1033,22 +1073,20 @@ function App() {
                         <div className="tag-picker" role="dialog" aria-label={`${item.name}へ割り当てるタグ`}>
                           <div className="tag-picker-heading">
                             <strong>タグを選択</strong>
-                            <button aria-label="閉じる" onClick={() => setOpenTagPickerSourceId(null)} type="button">×</button>
+                            <button aria-label="閉じる" onClick={() => setOpenTagPickerSourceId(null)} title="閉じる" type="button"><Icon name="close" size={16} /></button>
                           </div>
                           <div className="tag-picker-list">
                             {managedTags.map((tagItem) => {
                               const selected = tagIdsForSource(item.id).includes(tagItem.id)
                               return (
-                                <button
-                                  aria-pressed={selected}
+                                <label
                                   className={selected ? 'is-active' : ''}
                                   key={tagItem.id}
-                                  onClick={() => void toggleSourceTag(item, tagItem.id)}
-                                  type="button"
                                 >
-                                  <span>{selected ? '✓' : ''}</span>
+                                  <input checked={selected} onChange={() => void toggleSourceTag(item, tagItem.id)} type="checkbox" />
+                                  <span aria-hidden="true">{selected ? <Icon name="check" size={11} /> : null}</span>
                                   {tagItem.name}
-                                </button>
+                                </label>
                               )
                             })}
                             {!managedTags.length && <p>設定可能なタグがありません.</p>}
@@ -1086,13 +1124,13 @@ function App() {
       ) : tagManagerOpen ? (
         <main className="category-page" id="top">
           <div className="library-page-heading">
-            <button className="back-to-reader" onClick={navigateToReader} type="button">
-              <Icon name="arrow-left" size={19} /> 戻る
+            <button aria-label="戻る" className="back-to-reader" onClick={navigateToReader} title="戻る" type="button">
+              <Icon name="arrow-left" size={19} />
             </button>
             <p className="eyebrow">TAG SETTINGS</p>
             <h1>タグ一覧</h1>
             <p className="category-page-description">
-              ニュースソースに設定可能なタグの追加, 名前変更, 削除ができます. タグの割り当てはソースページで行います.
+              ニュースソースに設定可能なタグの追加, 名前変更, 削除ができます. タグの割り当てはソースページまたは記事カードで行います.
             </p>
           </div>
 
@@ -1107,7 +1145,7 @@ function App() {
                 type="text"
                 value={newTagName}
               />
-              <button disabled={!newTagName.trim()} type="submit">追加</button>
+              <button aria-label="タグを追加" disabled={!newTagName.trim()} title="タグを追加" type="submit"><Icon name="plus" size={17} /></button>
             </div>
           </form>
 
@@ -1130,16 +1168,16 @@ function App() {
                         onChange={(event) => setEditingTagName(event.target.value)}
                         value={editingTagName}
                       />
-                      <button disabled={!editingTagName.trim()} type="submit">保存</button>
-                      <button onClick={() => setEditingTagId(null)} type="button">取消</button>
+                      <button aria-label="保存" disabled={!editingTagName.trim()} title="保存" type="submit"><Icon name="check" size={16} /></button>
+                      <button aria-label="取消" onClick={() => setEditingTagId(null)} title="取消" type="button"><Icon name="close" size={16} /></button>
                     </form>
                   ) : (
                     <strong>{item.name}</strong>
                   )}
                   <span className="category-article-count">{sourceCount}件</span>
                   <div className="category-row-actions">
-                    <button onClick={() => startEditingTag(item)} type="button">変更</button>
-                    <button className="category-delete-button" onClick={() => deleteTag(item.id)} type="button">削除</button>
+                    <button aria-label={`${item.name}を変更`} onClick={() => startEditingTag(item)} title="変更" type="button"><Icon name="edit" size={16} /></button>
+                    <button aria-label={`${item.name}を削除`} className="category-delete-button" onClick={() => deleteTag(item.id)} title="削除" type="button"><Icon name="trash" size={16} /></button>
                   </div>
                 </div>
               )
@@ -1151,21 +1189,21 @@ function App() {
       ) : libraryMode ? (
         <main className="library-page" id="top">
           <div className="library-page-heading">
-            <button className="back-to-reader" onClick={navigateToReader} type="button">
-              <Icon name="arrow-left" size={19} /> 戻る
+            <button aria-label="戻る" className="back-to-reader" onClick={navigateToReader} title="戻る" type="button">
+              <Icon name="arrow-left" size={19} />
             </button>
             <p className="eyebrow">YOUR LIBRARY</p>
             <h1>記事ライブラリ</h1>
           </div>
           <div className="library-tabs" role="tablist" aria-label="記事の状態">
-            <button className={libraryMode === 'favorite' ? 'is-active' : ''} onClick={() => navigateToLibrary('favorite')} type="button">
-              お気に入り <span>{articleStats.favorite}</span>
+            <button aria-label={`お気に入り（${articleStats.favorite}件）`} className={libraryMode === 'favorite' ? 'is-active' : ''} onClick={() => navigateToLibrary('favorite')} title={`お気に入り（${articleStats.favorite}件）`} type="button">
+              <Icon name="star" size={18} />
             </button>
-            <button className={libraryMode === 'saved' ? 'is-active' : ''} onClick={() => navigateToLibrary('saved')} type="button">
-              あとで見る <span>{articleStats.saved}</span>
+            <button aria-label={`あとで見る（${articleStats.saved}件）`} className={libraryMode === 'saved' ? 'is-active' : ''} onClick={() => navigateToLibrary('saved')} title={`あとで見る（${articleStats.saved}件）`} type="button">
+              <Icon name="bookmark" size={18} />
             </button>
-            <button className={libraryMode === 'deleted' ? 'is-active' : ''} onClick={() => navigateToLibrary('deleted')} type="button">
-              ゴミ箱 <span>{articleStats.deleted}</span>
+            <button aria-label={`ゴミ箱（${articleStats.deleted}件）`} className={libraryMode === 'deleted' ? 'is-active' : ''} onClick={() => navigateToLibrary('deleted')} title={`ゴミ箱（${articleStats.deleted}件）`} type="button">
+              <Icon name="trash" size={18} />
             </button>
           </div>
           <div className="library-list">
@@ -1189,8 +1227,8 @@ function App() {
                     <strong>{article.title}</strong>
                   </div>
                 )}
-                <button className="library-remove" onClick={() => removeFromLibrary(article.id)} type="button">
-                  {libraryMode === 'deleted' ? '復元' : '解除'}
+                <button aria-label={libraryMode === 'deleted' ? '記事を復元' : '一覧から解除'} className="library-remove" onClick={() => removeFromLibrary(article.id)} title={libraryMode === 'deleted' ? '復元' : '解除'} type="button">
+                  <Icon name={libraryMode === 'deleted' ? 'refresh' : 'close'} size={16} />
                 </button>
               </article>
             ))}
@@ -1198,12 +1236,14 @@ function App() {
             {!libraryLoading && !libraryArticles.length && <div className="library-empty">該当する記事はありません.</div>}
             {libraryNextCursor && (
               <button
+                aria-label={libraryLoading ? '記事を取得中' : `さらに表示（${libraryArticles.length} / ${libraryTotal}）`}
                 className="library-load-more"
                 disabled={libraryLoading}
                 onClick={() => void loadMoreLibraryArticles()}
+                title={libraryLoading ? '取得中' : 'さらに表示'}
                 type="button"
               >
-                {libraryLoading ? '取得中' : `さらに表示 (${libraryArticles.length} / ${libraryTotal})`}
+                <Icon name="plus" size={18} />
               </button>
             )}
           </div>
@@ -1217,39 +1257,46 @@ function App() {
 
           <div className="filter-mode-switch" aria-label="絞り込み方法" role="tablist">
             <button
+              aria-label="ニュースソースで絞り込む"
               aria-selected={filterMode === 'source'}
               className={filterMode === 'source' ? 'is-active' : ''}
               onClick={() => selectFilterMode('source')}
               role="tab"
+              title="ニュースソース"
               type="button"
             >
-              ニュースソース
+              <Icon name="rss" size={17} />
             </button>
             <button
+              aria-label="タグで絞り込む"
               aria-selected={filterMode === 'tag'}
               className={filterMode === 'tag' ? 'is-active' : ''}
               onClick={() => selectFilterMode('tag')}
               role="tab"
+              title="タグ"
               type="button"
             >
-              タグ
+              <Icon name="tag" size={17} />
             </button>
           </div>
 
           <nav aria-label={filterMode === 'source' ? 'ニュースソース' : 'タグ'} className="category-nav filter-option-list">
             {(filterMode === 'source' ? sourceOptions : tagOptions).map((item) => (
-              <button
+              <a
                 aria-current={(filterMode === 'source' ? source : tag) === item.id ? 'page' : undefined}
                 className={(filterMode === 'source' ? source : tag) === item.id ? 'is-active' : ''}
+                href="#top"
                 key={item.id}
-                onClick={() => filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)}
-                type="button"
+                onClick={(event) => {
+                  event.preventDefault()
+                  filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)
+                }}
               >
                 <span>{item.name}</span>
                 <span>
                   {filterMode === 'source' ? remainingSourceCount(item.id) : remainingTagCount(item.id)}
                 </span>
-              </button>
+              </a>
             ))}
           </nav>
 
@@ -1261,23 +1308,26 @@ function App() {
 
         <section className="reader-panel" aria-live="polite">
           <div className="mobile-filter-mode" aria-label="絞り込み方法">
-            <button className={filterMode === 'source' ? 'is-active' : ''} onClick={() => selectFilterMode('source')} type="button">
-              ニュースソース
+            <button aria-label="ニュースソースで絞り込む" className={filterMode === 'source' ? 'is-active' : ''} onClick={() => selectFilterMode('source')} title="ニュースソース" type="button">
+              <Icon name="rss" size={17} />
             </button>
-            <button className={filterMode === 'tag' ? 'is-active' : ''} onClick={() => selectFilterMode('tag')} type="button">
-              タグ
+            <button aria-label="タグで絞り込む" className={filterMode === 'tag' ? 'is-active' : ''} onClick={() => selectFilterMode('tag')} title="タグ" type="button">
+              <Icon name="tag" size={17} />
             </button>
           </div>
           <div className="mobile-categories" aria-label={filterMode === 'source' ? 'ニュースソース' : 'タグ'}>
             {(filterMode === 'source' ? sourceOptions : tagOptions).map((item) => (
-              <button
+              <a
                 className={(filterMode === 'source' ? source : tag) === item.id ? 'is-active' : ''}
+                href="#top"
                 key={item.id}
-                onClick={() => filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)}
-                type="button"
+                onClick={(event) => {
+                  event.preventDefault()
+                  filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)
+                }}
               >
                 {item.name}
-              </button>
+              </a>
             ))}
           </div>
 
@@ -1318,7 +1368,8 @@ function App() {
                 <ArticleCard
                   article={currentArticle}
                   key={currentArticle.id}
-                  tagLabels={tagNamesForSource(currentArticle.sourceId)}
+                  tags={managedTags}
+                  tagIds={tagIdsForSource(currentArticle.sourceId)}
                   dragX={dragX}
                   dragging={dragging}
                   expanded={articleExpanded}
@@ -1327,6 +1378,14 @@ function App() {
                   onExpandedChange={setArticleExpanded}
                   onVisit={() => void markArticleRead(currentArticle, true)}
                   onToggleFavorite={() => toggleFavorite(currentArticle.id)}
+                  onCreateTag={(name) => {
+                    const targetSource = managedSources.find((item) => item.id === currentArticle.sourceId)
+                    return targetSource ? createAndAssignSourceTag(targetSource, name) : Promise.resolve(false)
+                  }}
+                  onToggleTag={(tagId) => {
+                    const targetSource = managedSources.find((item) => item.id === currentArticle.sourceId)
+                    return targetSource ? toggleSourceTag(targetSource, tagId) : Promise.resolve()
+                  }}
                   onPointerCancel={handlePointerCancel}
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
@@ -1339,8 +1398,8 @@ function App() {
                 <p className="eyebrow">YOU ARE ALL CAUGHT UP</p>
                 <h2>表示できる未読記事はありません</h2>
                 {articleStats.skipped > 0 && (
-                  <button type="button" onClick={restoreSkippedArticles}>
-                    <Icon name="refresh" size={18} /> スキップ解除
+                  <button aria-label="スキップを解除" onClick={restoreSkippedArticles} title="スキップ解除" type="button">
+                    <Icon name="refresh" size={18} />
                   </button>
                 )}
               </div>
@@ -1349,22 +1408,24 @@ function App() {
 
           <div className="reader-actions">
             <button
+              aria-label="スキップ"
               className="action-button action-button--skip"
               disabled={!currentArticle || animating || articleExpanded}
               onClick={() => completeSwipe('skip')}
+              title="スキップ"
               type="button"
             >
               <Icon name="close" size={22} />
-              <span>スキップ</span>
             </button>
             <button
+              aria-label="あとで見るに保存"
               className="action-button action-button--save"
               disabled={!currentArticle || animating || articleExpanded}
               onClick={() => completeSwipe('save')}
+              title="保存"
               type="button"
             >
               <Icon name="bookmark" size={20} />
-              <span>保存</span>
             </button>
           </div>
         </section>

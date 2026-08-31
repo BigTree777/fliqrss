@@ -19,6 +19,43 @@ func TestNewMemoryStartsEmpty(t *testing.T) {
 	}
 }
 
+func TestListTagsIncludesUsageAndLastUsedAt(t *testing.T) {
+	memory := NewMemory()
+	firstSource, err := memory.CreateSource("First", "https://example.com/first.xml", "rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSource, err := memory.CreateSource("Second", "https://example.com/second.xml", "rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frequentTag, err := memory.CreateTag("Frequent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentTag, err := memory.CreateTag("Recent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.SetSourceTags(firstSource.ID, []string{frequentTag.ID, recentTag.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.SetSourceTags(secondSource.ID, []string{frequentTag.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags := memory.ListTags()
+	if len(tags) != 2 {
+		t.Fatalf("tags = %d, want 2", len(tags))
+	}
+	if tags[0].UsageCount != 2 || tags[0].LastUsedAt == nil {
+		t.Fatalf("frequent tag metadata = %+v", tags[0])
+	}
+	if tags[1].UsageCount != 1 || tags[1].LastUsedAt == nil {
+		t.Fatalf("recent tag metadata = %+v", tags[1])
+	}
+}
+
 func TestMarkAllReadOnlyMarksVisibleFeedArticles(t *testing.T) {
 	memory := NewMemory()
 	source, err := memory.CreateSource("Example", "https://example.com/feed.xml", "rss")

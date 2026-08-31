@@ -331,8 +331,13 @@ func (s *PostgreSQL) DeleteSource(id string) error {
 func (s *PostgreSQL) SetSourceTags(id string, tagIDs []string) (model.Source, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.memory.GetSource(id); err != nil {
+	currentSource, err := s.memory.GetSource(id)
+	if err != nil {
 		return model.Source{}, err
+	}
+	previous := make(map[string]struct{}, len(currentSource.TagIDs))
+	for _, tagID := range currentSource.TagIDs {
+		previous[tagID] = struct{}{}
 	}
 	for _, tagID := range tagIDs {
 		if !s.memory.hasTag(tagID) {
@@ -350,9 +355,15 @@ func (s *PostgreSQL) SetSourceTags(id string, tagIDs []string) (model.Source, er
 	if _, err := tx.ExecContext(ctx, `DELETE FROM source_tags WHERE source_id=$1`, id); err != nil {
 		return model.Source{}, err
 	}
+	usedAt := time.Now().UTC()
 	for position, tagID := range tagIDs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_tags (source_id,tag_id,position) VALUES ($1,$2,$3)`, id, tagID, position); err != nil {
 			return model.Source{}, err
+		}
+		if _, alreadyAssigned := previous[tagID]; !alreadyAssigned {
+			if _, err := tx.ExecContext(ctx, `UPDATE tags SET last_used_at=$2 WHERE id=$1`, tagID, usedAt); err != nil {
+				return model.Source{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -454,7 +465,7 @@ func (s *PostgreSQL) load(ctx context.Context) error {
 }
 
 func (s *PostgreSQL) loadTags(ctx context.Context) ([]model.Tag, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,created_at FROM tags ORDER BY sort_order`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,created_at,last_used_at FROM tags ORDER BY sort_order`)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +473,7 @@ func (s *PostgreSQL) loadTags(ctx context.Context) ([]model.Tag, error) {
 	var result []model.Tag
 	for rows.Next() {
 		var tag model.Tag
-		if err := rows.Scan(&tag.ID, &tag.Name, &tag.CreatedAt); err != nil {
+		if err := rows.Scan(&tag.ID, &tag.Name, &tag.CreatedAt, &tag.LastUsedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, tag)

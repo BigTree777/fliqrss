@@ -45,9 +45,11 @@ type Source struct {
 }
 
 type Tag struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UsageCount int        `json:"usageCount"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
 }
 
 type ArticleFilter struct {
