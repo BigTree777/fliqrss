@@ -890,7 +890,7 @@ kbd {
   background: white;
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: 16px;
 }
 
 .tag-create-dialog > input:focus {
