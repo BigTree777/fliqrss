@@ -2170,6 +2170,12 @@ kbd {
 }
 
 @media (max-width: 760px) {
+  input:not([type='checkbox']):not([type='radio']),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
   .topbar {
     height: 66px;
     padding: 0 18px;
