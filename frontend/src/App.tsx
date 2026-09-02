@@ -79,6 +79,9 @@ function App() {
   const [draggedSourceId, setDraggedSourceId] = useState<string | null>(null)
   const [dragOverSourceId, setDragOverSourceId] = useState<string | null>(null)
   const [refreshingSources, setRefreshingSources] = useState(false)
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null)
+  const [editingSourceName, setEditingSourceName] = useState('')
+  const [savingSourceId, setSavingSourceId] = useState<string | null>(null)
   const [markingAllRead, setMarkingAllRead] = useState(false)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
@@ -351,12 +354,49 @@ function App() {
     }
   }
 
+  const startEditingSource = (targetSource: Source) => {
+    setOpenTagPickerSourceId(null)
+    setEditingSourceId(targetSource.id)
+    setEditingSourceName(targetSource.name)
+  }
+
+  const saveSourceName = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = editingSourceName.trim()
+    if (!editingSourceId || !name || savingSourceId) return
+
+    const currentSource = managedSources.find((item) => item.id === editingSourceId)
+    if (currentSource?.name === name) {
+      setEditingSourceId(null)
+      setEditingSourceName('')
+      return
+    }
+
+    setSavingSourceId(editingSourceId)
+    try {
+      const updated = await api.updateSource(editingSourceId, { name })
+      setManagedSources((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setEditingSourceId(null)
+      setEditingSourceName('')
+      setApiError('')
+      showNotice('ニュースソース名を変更しました')
+    } catch (error) {
+      showApiError(error)
+    } finally {
+      setSavingSourceId(null)
+    }
+  }
+
   const deleteSource = async (targetSource: Source) => {
     try {
       await api.deleteSource(targetSource.id)
       setManagedSources((current) => current.filter((item) => item.id !== targetSource.id))
       if (source === targetSource.id) setSource(ALL_SOURCES)
       if (openTagPickerSourceId === targetSource.id) setOpenTagPickerSourceId(null)
+      if (editingSourceId === targetSource.id) {
+        setEditingSourceId(null)
+        setEditingSourceName('')
+      }
       await Promise.all([loadFeed(), refreshStats()])
       setApiError('')
       showNotice('ニュースソースを削除しました')
@@ -1105,7 +1145,41 @@ function App() {
                 <div className="source-manager-icon"><Icon name="rss" size={20} /></div>
                 <div className="source-manager-details">
                   <div>
-                    <strong>{item.name}</strong>
+                    {editingSourceId === item.id ? (
+                      <form className="source-name-edit-form" onSubmit={saveSourceName}>
+                        <input
+                          aria-label="ニュースソース名"
+                          autoFocus
+                          disabled={savingSourceId === item.id}
+                          maxLength={60}
+                          onChange={(event) => setEditingSourceName(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Escape' || savingSourceId === item.id) return
+                            setEditingSourceId(null)
+                            setEditingSourceName('')
+                          }}
+                          value={editingSourceName}
+                        />
+                        <button
+                          aria-label="ニュースソース名を保存"
+                          disabled={!editingSourceName.trim() || savingSourceId === item.id}
+                          title="保存"
+                          type="submit"
+                        ><Icon name="check" size={16} /></button>
+                        <button
+                          aria-label="ニュースソース名の編集を取り消す"
+                          disabled={savingSourceId === item.id}
+                          onClick={() => {
+                            setEditingSourceId(null)
+                            setEditingSourceName('')
+                          }}
+                          title="取消"
+                          type="button"
+                        ><Icon name="close" size={16} /></button>
+                      </form>
+                    ) : (
+                      <strong>{item.name}</strong>
+                    )}
                     <span className={`source-status ${item.enabled ? 'is-enabled' : ''}`}>
                       {item.enabled ? '取得中' : '停止中'}
                     </span>
@@ -1158,7 +1232,17 @@ function App() {
                 </div>
                 <div className="source-manager-actions">
                   <button
+                    aria-label={`${item.name}の名前を変更`}
+                    disabled={Boolean(savingSourceId)}
+                    onClick={() => startEditingSource(item)}
+                    title="名前を変更"
+                    type="button"
+                  >
+                    <Icon name="edit" size={16} />
+                  </button>
+                  <button
                     aria-label={`${item.name}の取得を${item.enabled ? '停止' : '再開'}`}
+                    disabled={savingSourceId === item.id}
                     onClick={() => void toggleSourceEnabled(item)}
                     title={item.enabled ? '取得を停止' : '取得を再開'}
                     type="button"
@@ -1168,6 +1252,7 @@ function App() {
                   <button
                     aria-label={`${item.name}を削除`}
                     className="category-delete-button"
+                    disabled={savingSourceId === item.id}
                     onClick={() => deleteSource(item)}
                     title="ニュースソースを削除"
                     type="button"
