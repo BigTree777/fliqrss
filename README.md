@@ -267,18 +267,42 @@ curl.exe https://fliqrss-vps.<tailnet-name>.ts.net/api/v1/health
 ## 更新
 
 ローカルでpushした変更をVPSへ反映する.
+初回のみリポジトリを更新して, 更新スクリプトを実行する.
 
 ```bash
 cd /opt/fliqrss
 git pull --ff-only
-docker compose up --build -d
-cd frontend
-npm ci
-npm run typecheck
-sudo systemctl restart fliqrss-frontend
+./scripts/update.sh
 ```
 
-起動後に状態を確認する.
+2回目以降は更新スクリプトだけを実行する.
+
+```bash
+cd /opt/fliqrss
+./scripts/update.sh
+```
+
+スクリプトは`git pull --ff-only`を実行し, 最後に適用したコミットからの変更内容に応じて次の処理を行う.
+
+- `backend/`の変更時はバックエンドだけを再ビルドする.
+- `compose.yaml`の変更時はComposeサービス全体を更新する.
+- `frontend/`の変更時は型検査後に`fliqrss-frontend`を再起動する.
+- `package.json`または`package-lock.json`の変更時は`npm ci`も実行する.
+- バックエンド更新時はコンテナ内のヘルスチェック完了を待つ.
+
+一般ユーザーで実行した場合, フロントエンドの再起動と起動確認には内部で次のコマンドを使用する.
+そのため実行ユーザーには`sudo`権限が必要であり, 設定によっては更新中にパスワード入力を求められる.
+
+```bash
+sudo systemctl restart fliqrss-frontend
+sudo systemctl is-active --quiet fliqrss-frontend
+```
+
+最終適用コミットは`.git/fliqrss-deployed-revision`へ保存する.
+処理が途中で失敗した場合は記録を更新しないため, 問題を解消して再実行すると未適用分を再処理する.
+作業ツリーに未コミットまたは未追跡ファイルがある場合は安全のため更新を開始しない.
+
+起動状態を追加で確認する場合は次を実行する.
 
 ```bash
 cd /opt/fliqrss
