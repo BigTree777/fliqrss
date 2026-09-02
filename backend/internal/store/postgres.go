@@ -132,32 +132,33 @@ func (s *PostgreSQL) ApplyArticleAction(id string, action model.ArticleAction) (
 	return s.memory.ApplyArticleAction(id, action)
 }
 
-func (s *PostgreSQL) MarkAllRead() (int, error) {
+func (s *PostgreSQL) MarkAllRead(sourceID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel := s.operationContext()
 	defer cancel()
 	result, err := s.db.ExecContext(ctx, `UPDATE articles SET is_read=TRUE, is_skipped=FALSE
-		WHERE duplicate_of_id='' AND is_read=FALSE AND is_saved=FALSE AND is_deleted=FALSE`)
+		WHERE ($1='' OR source_id=$1) AND duplicate_of_id='' AND is_read=FALSE AND is_saved=FALSE AND is_deleted=FALSE`, sourceID)
 	if err != nil {
 		return 0, err
 	}
 	count, _ := result.RowsAffected()
-	_, _ = s.memory.MarkAllRead()
+	_, _ = s.memory.MarkAllRead(sourceID)
 	return int(count), nil
 }
 
-func (s *PostgreSQL) ResetSkipped() (int, error) {
+func (s *PostgreSQL) ResetSkipped(sourceID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel := s.operationContext()
 	defer cancel()
-	result, err := s.db.ExecContext(ctx, `UPDATE articles SET is_read=FALSE, is_skipped=FALSE WHERE is_skipped=TRUE`)
+	result, err := s.db.ExecContext(ctx, `UPDATE articles SET is_read=FALSE, is_skipped=FALSE
+		WHERE ($1='' OR source_id=$1) AND is_skipped=TRUE`, sourceID)
 	if err != nil {
 		return 0, err
 	}
 	count, _ := result.RowsAffected()
-	_, _ = s.memory.ResetSkipped()
+	_, _ = s.memory.ResetSkipped(sourceID)
 	return int(count), nil
 }
 

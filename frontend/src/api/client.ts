@@ -94,8 +94,8 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify({ action }),
   }),
-  markAllRead: () => request<{ markedRead: number }>('/articles/mark-all-read', { method: 'POST' }),
-  resetSkipped: () => request<{ restored: number }>('/articles/reset-skipped', { method: 'POST' }),
+  markAllRead: (sourceId: string) => request<{ markedRead: number }>(`/articles/mark-all-read?sourceId=${encodeURIComponent(sourceId)}`, { method: 'POST' }),
+  resetSkipped: (sourceId: string) => request<{ restored: number }>(`/articles/reset-skipped?sourceId=${encodeURIComponent(sourceId)}`, { method: 'POST' }),
 
   listSources: () => request<Source[]>('/sources'),
   createSource: (name: string, url: string) => request<Source>('/sources', {

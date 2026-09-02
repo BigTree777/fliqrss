@@ -155,6 +155,40 @@ func TestArticleStats(t *testing.T) {
 	if stats.SourceFeedCounts[fixture.sources["orbit"]] != 0 || stats.TagFeedCounts[fixture.tags["business"]] != 1 {
 		t.Fatalf("feed counts = %+v, %+v", stats.SourceFeedCounts, stats.TagFeedCounts)
 	}
+	if stats.SourceSkippedCounts[fixture.sources["orbit"]] != 1 {
+		t.Fatalf("source skipped counts = %+v", stats.SourceSkippedCounts)
+	}
+}
+
+func TestBulkArticleActionsCanBeScopedToSource(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServer(fixture.memory, "")
+	orbitSourceID := fixture.sources["orbit"]
+	businessSourceID := fixture.sources["business"]
+
+	performRequest(t, server.Handler(), http.MethodPatch, "/api/v1/articles/future-interface/state", map[string]string{"action": "skip"})
+	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/reset-skipped?sourceId="+businessSourceID, nil)
+	if restored := decodeData[map[string]int](t, response)["restored"]; restored != 0 {
+		t.Fatalf("restored for unrelated source = %d, want 0", restored)
+	}
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/reset-skipped?sourceId="+orbitSourceID, nil)
+	if restored := decodeData[map[string]int](t, response)["restored"]; restored != 1 {
+		t.Fatalf("restored for target source = %d, want 1", restored)
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/mark-all-read?sourceId="+orbitSourceID, nil)
+	if marked := decodeData[map[string]int](t, response)["markedRead"]; marked != 1 {
+		t.Fatalf("marked for target source = %d, want 1", marked)
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles?sourceId="+businessSourceID, nil)
+	if articles := decodeData[[]model.Article](t, response); len(articles) != 1 {
+		t.Fatalf("unrelated source feed length = %d, want 1", len(articles))
+	}
+
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/mark-all-read?sourceId=missing", nil)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing source status = %d, want %d", response.Code, http.StatusNotFound)
+	}
 }
 
 func TestSourceAndTagWorkflow(t *testing.T) {

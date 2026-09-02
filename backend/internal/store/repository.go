@@ -8,8 +8,8 @@ type Repository interface {
 	ArticleStats() model.ArticleStats
 	GetArticle(string) (model.Article, error)
 	ApplyArticleAction(string, model.ArticleAction) (model.Article, error)
-	MarkAllRead() (int, error)
-	ResetSkipped() (int, error)
+	MarkAllRead(string) (int, error)
+	ResetSkipped(string) (int, error)
 
 	ListSources() []model.Source
 	GetSource(string) (model.Source, error)

@@ -66,14 +66,15 @@ type ArticlePage struct {
 }
 
 type ArticleStats struct {
-	Feed             int            `json:"feed"`
-	Favorite         int            `json:"favorite"`
-	Saved            int            `json:"saved"`
-	Deleted          int            `json:"deleted"`
-	Skipped          int            `json:"skipped"`
-	UntaggedFeed     int            `json:"untaggedFeed"`
-	SourceFeedCounts map[string]int `json:"sourceFeedCounts"`
-	TagFeedCounts    map[string]int `json:"tagFeedCounts"`
+	Feed                int            `json:"feed"`
+	Favorite            int            `json:"favorite"`
+	Saved               int            `json:"saved"`
+	Deleted             int            `json:"deleted"`
+	Skipped             int            `json:"skipped"`
+	UntaggedFeed        int            `json:"untaggedFeed"`
+	SourceFeedCounts    map[string]int `json:"sourceFeedCounts"`
+	SourceSkippedCounts map[string]int `json:"sourceSkippedCounts"`
+	TagFeedCounts       map[string]int `json:"tagFeedCounts"`
 }
 
 type ArticleAction string

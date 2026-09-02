@@ -42,6 +42,7 @@ const emptyArticleStats: ArticleStats = {
   skipped: 0,
   untaggedFeed: 0,
   sourceFeedCounts: {},
+  sourceSkippedCounts: {},
   tagFeedCounts: {},
 }
 
@@ -89,7 +90,7 @@ function App() {
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null)
   const [editingSourceName, setEditingSourceName] = useState('')
   const [savingSourceId, setSavingSourceId] = useState<string | null>(null)
-  const [markingAllRead, setMarkingAllRead] = useState(false)
+  const [markingSourceId, setMarkingSourceId] = useState<string | null>(null)
   const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(() => window.location.hash === '#/tags')
@@ -115,6 +116,7 @@ function App() {
   const opmlInput = useRef<HTMLInputElement | null>(null)
   const feedRequestID = useRef(0)
   const libraryRequestID = useRef(0)
+  const deletingArticleIds = useRef(new Set<string>())
 
   useEffect(() => {
     const root = document.documentElement
@@ -667,17 +669,22 @@ function App() {
     }
   }
 
-  const deleteArticle = async (articleId: string) => {
+  const deleteArticle = useCallback(async (articleId: string) => {
+    if (deletingArticleIds.current.has(articleId)) return
+    deletingArticleIds.current.add(articleId)
     try {
       await updateArticleState(articleId, 'delete')
       setArticles((current) => current.filter((item) => item.id !== articleId))
       setProcessedCount((current) => current + 1)
+      setArticleExpanded(false)
       await refreshStats()
       showNotice('削除記事一覧へ移動しました')
     } catch (error) {
       showApiError(error)
+    } finally {
+      deletingArticleIds.current.delete(articleId)
     }
-  }
+  }, [refreshStats, showApiError, showNotice, updateArticleState])
 
   const removeFromLibrary = async (articleId: string) => {
     const action = libraryMode === 'favorite'
@@ -700,33 +707,22 @@ function App() {
     }
   }
 
-  const restoreSkippedArticles = async () => {
+  const markAllArticlesRead = async (sourceId: string, sourceName: string) => {
+    const unreadCount = articleStats.sourceFeedCounts[sourceId] ?? 0
+    if (markingSourceId || unreadCount === 0) return
+    if (!window.confirm(`${sourceName}の未読記事${unreadCount}件をすべて既読にしますか？`)) return
+    setMarkingSourceId(sourceId)
     try {
-      const result = await api.resetSkipped()
-      await Promise.all([loadFeed(), refreshStats()])
-      setDragX(0)
-      setApiError('')
-      showNotice(`${result.restored}件のスキップを解除しました`)
-    } catch (error) {
-      showApiError(error)
-    }
-  }
-
-  const markAllArticlesRead = async () => {
-    if (markingAllRead || articleStats.feed === 0) return
-    if (!window.confirm(`${articleStats.feed}件の未読記事をすべて既読にしますか？`)) return
-    setMarkingAllRead(true)
-    try {
-      const result = await api.markAllRead()
+      const result = await api.markAllRead(sourceId)
       setMenuOpen(false)
       setDragX(0)
       await Promise.all([loadFeed(), refreshStats()])
       setApiError('')
-      showNotice(`${result.markedRead}件を既読にしました`)
+      showNotice(`${sourceName}の記事を${result.markedRead}件既読にしました`)
     } catch (error) {
       showApiError(error)
     } finally {
-      setMarkingAllRead(false)
+      setMarkingSourceId(null)
     }
   }
 
@@ -830,8 +826,15 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+
       if (articleExpanded) {
         if (event.key === 'Escape') setArticleExpanded(false)
+        if (event.key === 'Delete' && currentArticle && !animating && !event.repeat) {
+          event.preventDefault()
+          void deleteArticle(currentArticle.id)
+        }
         return
       }
 
@@ -851,11 +854,15 @@ function App() {
       if (event.key === 'ArrowLeft') completeSwipe('skip')
       if (event.key === 'ArrowRight') completeSwipe('save')
       if (event.key === 'Enter' && currentArticle) openOriginalArticle(currentArticle)
+      if (event.key === 'Delete' && currentArticle && !animating && !event.repeat) {
+        event.preventDefault()
+        void deleteArticle(currentArticle.id)
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [articleExpanded, completeSwipe, currentArticle, focusMode, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
+  }, [animating, articleExpanded, completeSwipe, currentArticle, deleteArticle, focusMode, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
 
   useEffect(
     () => () => {
@@ -950,16 +957,6 @@ function App() {
         </div>
 
         <div className="header-menu">
-          <button
-            aria-label={markingAllRead ? 'すべての記事を既読にしています' : `すべて既読にする（未読${articleStats.feed}件）`}
-            className="header-mark-all-read-button"
-            disabled={markingAllRead || articleStats.feed === 0}
-            onClick={() => void markAllArticlesRead()}
-            title={markingAllRead ? '既読にしています' : 'すべて既読にする'}
-            type="button"
-          >
-            <Icon name="check" size={20} />
-          </button>
           <button
             aria-label={refreshingSources ? 'ニュースソースを更新中' : 'すべてのニュースソースを更新'}
             className={`header-refresh-button${refreshingSources ? ' is-refreshing' : ''}`}
@@ -1442,21 +1439,45 @@ function App() {
           </div>
 
           <nav aria-label={filterMode === 'source' ? 'ニュースソース' : 'タグ'} className="category-nav filter-option-list">
-            {(filterMode === 'source' ? sourceOptions : tagOptions).map((item) => (
+            {filterMode === 'source' ? sourceOptions.map((item) => (
+              <div className="source-filter-row" key={item.id}>
+                <a
+                  aria-current={source === item.id ? 'page' : undefined}
+                  className={source === item.id ? 'is-active' : ''}
+                  href="#top"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    selectSource(item.id)
+                  }}
+                >
+                  <span>{item.name}</span>
+                  <span>{remainingSourceCount(item.id)}</span>
+                </a>
+                {item.id !== ALL_SOURCES && (
+                  <div className="source-filter-actions">
+                    <button
+                      aria-label={`${item.name}をすべて既読にする`}
+                      disabled={Boolean(markingSourceId) || remainingSourceCount(item.id) === 0}
+                      onClick={() => void markAllArticlesRead(item.id, item.name)}
+                      title="すべて既読"
+                      type="button"
+                    ><Icon name="check" size={14} /></button>
+                  </div>
+                )}
+              </div>
+            )) : tagOptions.map((item) => (
               <a
-                aria-current={(filterMode === 'source' ? source : tag) === item.id ? 'page' : undefined}
-                className={(filterMode === 'source' ? source : tag) === item.id ? 'is-active' : ''}
+                aria-current={tag === item.id ? 'page' : undefined}
+                className={tag === item.id ? 'is-active' : ''}
                 href="#top"
                 key={item.id}
                 onClick={(event) => {
                   event.preventDefault()
-                  filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)
+                  selectTag(item.id)
                 }}
               >
                 <span>{item.name}</span>
-                <span>
-                  {filterMode === 'source' ? remainingSourceCount(item.id) : remainingTagCount(item.id)}
-                </span>
+                <span>{remainingTagCount(item.id)}</span>
               </a>
             ))}
           </nav>
@@ -1464,6 +1485,7 @@ function App() {
           <div className="keyboard-help">
             <span><kbd>←</kbd> スキップ</span>
             <span><kbd>→</kbd> 保存</span>
+            <span><kbd>Del</kbd> 削除</span>
           </div>
         </aside>
 
@@ -1476,15 +1498,39 @@ function App() {
               <Icon name="tag" size={17} />
             </button>
           </div>
-          <div className="mobile-categories" aria-label={filterMode === 'source' ? 'ニュースソース' : 'タグ'}>
-            {(filterMode === 'source' ? sourceOptions : tagOptions).map((item) => (
+          <div className={`mobile-categories${filterMode === 'source' ? ' is-source-mode' : ''}`} aria-label={filterMode === 'source' ? 'ニュースソース' : 'タグ'}>
+            {filterMode === 'source' ? sourceOptions.map((item) => (
+              <div className="mobile-source-filter" key={item.id}>
+                <a
+                  className={source === item.id ? 'is-active' : ''}
+                  href="#top"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    selectSource(item.id)
+                  }}
+                >
+                  {item.name}
+                </a>
+                {item.id !== ALL_SOURCES && (
+                  <div className="mobile-source-actions">
+                    <button
+                      aria-label={`${item.name}をすべて既読にする`}
+                      disabled={Boolean(markingSourceId) || remainingSourceCount(item.id) === 0}
+                      onClick={() => void markAllArticlesRead(item.id, item.name)}
+                      title="すべて既読"
+                      type="button"
+                    ><Icon name="check" size={13} /></button>
+                  </div>
+                )}
+              </div>
+            )) : tagOptions.map((item) => (
               <a
-                className={(filterMode === 'source' ? source : tag) === item.id ? 'is-active' : ''}
+                className={tag === item.id ? 'is-active' : ''}
                 href="#top"
                 key={item.id}
                 onClick={(event) => {
                   event.preventDefault()
-                  filterMode === 'source' ? selectSource(item.id) : selectTag(item.id)
+                  selectTag(item.id)
                 }}
               >
                 {item.name}
@@ -1558,11 +1604,6 @@ function App() {
                 <div className="complete-mark"><Icon name="check" size={34} /></div>
                 <p className="eyebrow">YOU ARE ALL CAUGHT UP</p>
                 <h2>表示できる未読記事はありません</h2>
-                {articleStats.skipped > 0 && (
-                  <button aria-label="スキップを解除" onClick={restoreSkippedArticles} title="スキップ解除" type="button">
-                    <Icon name="refresh" size={18} />
-                  </button>
-                )}
               </div>
             )}
           </div>

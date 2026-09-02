@@ -83,7 +83,7 @@ func TestMarkAllReadOnlyMarksVisibleFeedArticles(t *testing.T) {
 		}
 	}
 
-	count, err := memory.MarkAllRead()
+	count, err := memory.MarkAllRead(source.ID)
 	if err != nil || count != 2 {
 		t.Fatalf("mark all read: count=%d, err=%v", count, err)
 	}

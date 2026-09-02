@@ -129,7 +129,7 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	if restoredSource.ArticleCount != 1 || len(restoredSource.TagIDs) != 1 || restoredSource.TagIDs[0] != tag.ID {
 		t.Fatalf("source relations were not persisted: %+v", restoredSource)
 	}
-	if count, err := repository.ResetSkipped(); err != nil || count != 1 {
+	if count, err := repository.ResetSkipped(secondSource.ID); err != nil || count != 1 {
 		t.Fatalf("reset skipped: count=%d, err=%v", count, err)
 	}
 	restored, err = repository.GetArticle(duplicateArticle.ID)
@@ -147,7 +147,7 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	if _, added, err := repository.UpsertArticles(source.ID, "rss", []model.Article{unread}); err != nil || added != 1 {
 		t.Fatalf("upsert unread article: added=%d, err=%v", added, err)
 	}
-	if count, err := repository.MarkAllRead(); err != nil || count != 1 {
+	if count, err := repository.MarkAllRead(source.ID); err != nil || count != 1 {
 		t.Fatalf("mark all read: count=%d, err=%v", count, err)
 	}
 	unread, err = repository.GetArticle(unread.ID)

@@ -186,8 +186,15 @@ func (s *Server) updateArticleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dataResponse{Data: article})
 }
 
-func (s *Server) markAllRead(w http.ResponseWriter, _ *http.Request) {
-	count, err := s.store.MarkAllRead()
+func (s *Server) markAllRead(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.URL.Query().Get("sourceId")
+	if sourceID != "" {
+		if _, err := s.store.GetSource(sourceID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+	}
+	count, err := s.store.MarkAllRead(sourceID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -195,8 +202,15 @@ func (s *Server) markAllRead(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{"markedRead": count}})
 }
 
-func (s *Server) resetSkipped(w http.ResponseWriter, _ *http.Request) {
-	restored, err := s.store.ResetSkipped()
+func (s *Server) resetSkipped(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.URL.Query().Get("sourceId")
+	if sourceID != "" {
+		if _, err := s.store.GetSource(sourceID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+	}
+	restored, err := s.store.ResetSkipped(sourceID)
 	if err != nil {
 		writeStoreError(w, err)
 		return

@@ -110,8 +110,9 @@ func (s *Memory) ArticleStats() model.ArticleStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	stats := model.ArticleStats{
-		SourceFeedCounts: make(map[string]int),
-		TagFeedCounts:    make(map[string]int),
+		SourceFeedCounts:    make(map[string]int),
+		SourceSkippedCounts: make(map[string]int),
+		TagFeedCounts:       make(map[string]int),
 	}
 	for _, id := range s.articleOrder {
 		article := s.articleForRead(id)
@@ -139,6 +140,7 @@ func (s *Memory) ArticleStats() model.ArticleStats {
 		}
 		if article.State.Skipped {
 			stats.Skipped++
+			stats.SourceSkippedCounts[article.SourceID]++
 		}
 	}
 	return stats
@@ -250,13 +252,13 @@ func applyArticleAction(state model.ArticleState, action model.ArticleAction) (m
 	return state, nil
 }
 
-func (s *Memory) MarkAllRead() (int, error) {
+func (s *Memory) MarkAllRead(sourceID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	count := 0
 	for id, article := range s.articles {
-		if article.DuplicateOfID != "" || !matchesArticleState(article.State, "feed") {
+		if (sourceID != "" && article.SourceID != sourceID) || article.DuplicateOfID != "" || !matchesArticleState(article.State, "feed") {
 			continue
 		}
 		article.State.Read = true
@@ -267,13 +269,13 @@ func (s *Memory) MarkAllRead() (int, error) {
 	return count, nil
 }
 
-func (s *Memory) ResetSkipped() (int, error) {
+func (s *Memory) ResetSkipped(sourceID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	count := 0
 	for id, article := range s.articles {
-		if !article.State.Skipped {
+		if (sourceID != "" && article.SourceID != sourceID) || !article.State.Skipped {
 			continue
 		}
 		article.State.Read = false

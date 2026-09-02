@@ -54,6 +54,7 @@ export interface ArticleStats {
   skipped: number
   untaggedFeed: number
   sourceFeedCounts: Record<string, number>
+  sourceSkippedCounts: Record<string, number>
   tagFeedCounts: Record<string, number>
 }
 
