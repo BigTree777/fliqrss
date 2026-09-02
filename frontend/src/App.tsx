@@ -1142,7 +1142,6 @@ function App() {
                     type="button"
                   ><Icon name="drag-handle" size={27} /></button>
                 </div>
-                <div className="source-manager-icon"><Icon name="rss" size={20} /></div>
                 <div className="source-manager-details">
                   <div>
                     {editingSourceId === item.id ? (

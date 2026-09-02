@@ -1518,7 +1518,7 @@ kbd {
   padding: 17px 20px;
   border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 30px 42px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   transition: border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
@@ -1570,16 +1570,6 @@ kbd {
 
 .source-manager-item:last-child {
   border-bottom: 0;
-}
-
-.source-manager-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  background: var(--green);
-  color: white;
-  display: grid;
-  place-items: center;
 }
 
 .source-manager-details {
@@ -2422,12 +2412,12 @@ kbd {
   }
   .opml-export-panel > button { width: 100%; }
   .source-manager-item {
-    grid-template-columns: 30px 40px minmax(0, 1fr);
+    grid-template-columns: 30px minmax(0, 1fr);
     padding: 16px;
   }
   .source-manager-actions {
     grid-column: 1 / -1;
-    padding-left: 84px;
+    padding-left: 44px;
   }
   .category-manager-header { display: none; }
   .category-manager-item {
