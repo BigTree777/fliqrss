@@ -52,6 +52,13 @@ function libraryModeFromHash(): LibraryMode | null {
   return null
 }
 
+function sortByUnreadCount<T>(items: T[], unreadCount: (item: T) => number): T[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => unreadCount(right.item) - unreadCount(left.item) || left.index - right.index)
+    .map(({ item }) => item)
+}
+
 function App() {
   const [theme, setTheme] = useState<ColorTheme>(initialTheme)
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
@@ -145,16 +152,26 @@ function App() {
     (tagId) => managedTags.find((item) => item.id === tagId)?.name,
   ).filter((name): name is string => Boolean(name)), [managedTags, tagIdsForSource])
 
-  const tagOptions = useMemo(() => [
-    { id: ALL_TAGS, name: 'すべて' },
-    ...managedTags,
-    ...(articleStats.untaggedFeed ? [{ id: UNTAGGED, name: 'タグなし' }] : []),
-  ], [articleStats.untaggedFeed, managedTags])
+  const tagOptions = useMemo(() => {
+    const tags = [
+      ...managedTags.map((item) => ({ id: item.id, name: item.name })),
+      ...(articleStats.untaggedFeed ? [{ id: UNTAGGED, name: 'タグなし' }] : []),
+    ]
+    return [
+      { id: ALL_TAGS, name: 'すべて' },
+      ...sortByUnreadCount(tags, (item) => item.id === UNTAGGED
+        ? articleStats.untaggedFeed
+        : articleStats.tagFeedCounts[item.id] ?? 0),
+    ]
+  }, [articleStats.tagFeedCounts, articleStats.untaggedFeed, managedTags])
 
   const sourceOptions = useMemo(() => [
     { id: ALL_SOURCES, name: 'すべてのソース' },
-    ...managedSources.map((item) => ({ id: item.id, name: item.name })),
-  ], [managedSources])
+    ...sortByUnreadCount(
+      managedSources.map((item) => ({ id: item.id, name: item.name })),
+      (item) => articleStats.sourceFeedCounts[item.id] ?? 0,
+    ),
+  ], [articleStats.sourceFeedCounts, managedSources])
 
   const currentArticle = articles[0]
 
