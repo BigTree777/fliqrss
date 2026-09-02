@@ -535,7 +535,7 @@ kbd {
 
 .card-stage {
   position: relative;
-  min-height: 680px;
+  min-height: max(680px, calc(100dvh - 272px));
 }
 
 .stack-card,
