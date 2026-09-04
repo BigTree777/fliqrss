@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from './api/client'
-import type { OPMLImportResult } from './api/client'
+import type { OPMLImportResult, SourceFailure, SourceRefreshResult } from './api/client'
 import { ArticleCard } from './components/ArticleCard'
 import { Icon } from './components/Icon'
 import type { Article, ArticleAction, ArticleStats, Source, Tag } from './types/article'
@@ -60,6 +60,90 @@ function sortByUnreadCount<T>(items: T[], unreadCount: (item: T) => number): T[]
     .map(({ item }) => item)
 }
 
+const failureStageLabels: Record<SourceFailure['stage'], string> = {
+  validation: 'URL・内容の検証',
+  fetch: 'フィードの取得・解析',
+  save: 'データの保存',
+}
+
+function recommendedAction(failure: SourceFailure): string {
+  const reason = failure.reason.toLowerCase()
+  const retry = failure.sourceId
+    ? '「再試行」を押してください。'
+    : '同じOPMLファイルを選択し直して、もう一度取り込んでください。'
+  const replaceURL = failure.sourceId
+    ? '配信元で現在のRSS/Atom URLを確認し、このソースを削除して正しいURLで追加し直してください。'
+    : 'OPML内のURLを、配信元が案内している正しいRSS/Atom URLに修正してから、もう一度取り込んでください。'
+
+  if (failure.stage === 'validation') {
+    if (reason.includes('title')) {
+      return 'OPMLの該当項目にソース名を設定してから、もう一度取り込んでください。'
+    }
+    return replaceURL
+  }
+  if (failure.stage === 'save') {
+    return `${retry}繰り返し失敗する場合は、サーバー管理者に連絡してください。`
+  }
+  if (reason.includes('blocked network address')) {
+    return 'ローカル・社内向けURLは利用できません。インターネットからアクセスできる公開RSS/Atom URLに差し替えてください。'
+  }
+  if (reason.includes('maximum response size')) {
+    return 'このフィードは取得上限を超えています。配信元に軽量版のRSS/Atomがあれば、そちらのURLに差し替えてください。'
+  }
+  if (reason.includes('unsupported feed format')) {
+    return `記事ページではなくRSS/AtomそのもののURLが必要です。${replaceURL}`
+  }
+  if (/http status (404|410)\b/.test(reason)) {
+    return `このURLは配信元で廃止または移動されています。${replaceURL}`
+  }
+  if (/http status (401|403)\b/.test(reason)) {
+    return 'このURLは認証またはアクセス許可が必要です。ログイン不要で公開されているRSS/Atom URLに差し替えてください。'
+  }
+  if (/http status 429\b/.test(reason)) {
+    return `配信元のアクセス制限中です。しばらく時間を置いてから、${retry}`
+  }
+  if (/http status 5\d\d\b/.test(reason)) {
+    return `配信元のサーバーが一時的に停止しています。しばらく時間を置いてから、${retry}`
+  }
+  if (reason.includes('too many redirects')) {
+    return `URLの移転を正常に追跡できません。${replaceURL}`
+  }
+  if (reason.includes('timeout') || reason.includes('deadline exceeded')) {
+    return `通信が時間内に完了しませんでした。しばらく時間を置いてから、${retry}${failure.sourceId ? '繰り返す場合はこのソースを停止してください。' : ''}`
+  }
+  if (reason.includes('resolve feed host') || reason.includes('no such host')) {
+    return `URLのドメインが見つかりません。入力間違いまたは配信終了の可能性があります。${replaceURL}`
+  }
+  if (reason.includes('tls') || reason.includes('certificate') || reason.includes('x509')) {
+    return '配信元のHTTPS証明書に問題があります。配信元の修正を待つか、別の公開RSS/Atom URLに差し替えてください。'
+  }
+  if (reason.includes('connection refused') || reason.includes('connection reset') || reason.includes('network is unreachable')) {
+    return `配信元に接続できません。しばらく時間を置いてから、${retry}${failure.sourceId ? '繰り返す場合はこのソースを停止してください。' : ''}`
+  }
+  if (reason.includes('xml') || reason.includes('unexpected eof')) {
+    return `配信元のフィードが壊れています。しばらく時間を置いてから、${retry}直らない場合は別のRSS/Atom URLに差し替えてください。`
+  }
+  return `${retry}繰り返し失敗する場合は、配信元のRSS/Atom URLを確認し、${failure.sourceId ? 'このソースを停止または追加し直してください。' : 'OPML内のURLを修正してください。'}`
+}
+
+function SourceFailureList({ failures }: { failures: SourceFailure[] }) {
+  return (
+    <ul className="source-failure-list">
+      {failures.map((failure, index) => (
+        <li key={`${failure.sourceId ?? failure.url}-${index}`}>
+          <strong>{failure.name.trim() || '名称なし'}</strong>
+          <p className="source-failure-action"><b>対応</b>{recommendedAction(failure)}</p>
+          <details>
+            <summary>URLと技術情報を表示</summary>
+            <code>{failure.url || 'URLなし'}</code>
+            <span><b>{failureStageLabels[failure.stage] ?? '処理'}</b>: {failure.reason}</span>
+          </details>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function App() {
   const [theme, setTheme] = useState<ColorTheme>(initialTheme)
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
@@ -87,6 +171,7 @@ function App() {
   const [draggedSourceId, setDraggedSourceId] = useState<string | null>(null)
   const [dragOverSourceId, setDragOverSourceId] = useState<string | null>(null)
   const [refreshingSources, setRefreshingSources] = useState(false)
+  const [sourceRefreshResult, setSourceRefreshResult] = useState<SourceRefreshResult | null>(null)
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null)
   const [editingSourceName, setEditingSourceName] = useState('')
   const [savingSourceId, setSavingSourceId] = useState<string | null>(null)
@@ -321,6 +406,7 @@ function App() {
     setImportingOPML(true)
     try {
       const result = await api.importOPML(opmlFile)
+      setOPMLResult(result)
       const [nextSources, nextTags] = await Promise.all([
         api.listSources(),
         api.listTags(),
@@ -328,7 +414,6 @@ function App() {
       setManagedSources(nextSources)
       setManagedTags(nextTags)
       await Promise.all([loadFeed(), refreshStats()])
-      setOPMLResult(result)
       setOPMLFile(null)
       if (opmlInput.current) opmlInput.current.value = ''
       setApiError('')
@@ -457,12 +542,14 @@ function App() {
   const refreshAllSources = async () => {
     if (refreshingSources) return
     setRefreshingSources(true)
+    setSourceRefreshResult(null)
     try {
       const result = await api.refreshAllSources()
+      setSourceRefreshResult(result)
       await Promise.all([loadData(), loadFeed()])
       setApiError('')
       if (result.failed) {
-        showNotice(`${result.refreshed}件を更新し, ${result.failed}件失敗しました`)
+        return
       } else {
         showNotice(`${result.refreshed}件のニュースソースを更新しました`)
       }
@@ -1034,6 +1121,27 @@ function App() {
         </div>
       )}
 
+      {sourceRefreshResult && sourceRefreshResult.failures.length > 0 && (
+        <section className="source-refresh-error" role="alert" aria-label="ニュースソース更新の失敗内容">
+          <div>
+            <strong>{sourceRefreshResult.sources}件中{sourceRefreshResult.failed}件に対応が必要です</strong>
+            <p>ニュースソースごとの推奨操作を確認してください.</p>
+            <SourceFailureList failures={sourceRefreshResult.failures} />
+          </div>
+          <div className="source-refresh-error-actions">
+            <button onClick={navigateToSources} type="button">
+              <Icon name="rss" size={16} />ソース設定
+            </button>
+            <button disabled={refreshingSources} onClick={() => void refreshAllSources()} type="button">
+              <Icon name="refresh" size={16} />再試行
+            </button>
+            <button aria-label="失敗内容を閉じる" onClick={() => setSourceRefreshResult(null)} title="閉じる" type="button">
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        </section>
+      )}
+
       {sourceManagerOpen ? (
         <main className="category-page" id="top">
           <div className="library-page-heading">
@@ -1112,12 +1220,20 @@ function App() {
               </button>
             </form>
             {opmlResult && (
-              <dl className="opml-import-result" aria-label="OPML取込結果">
-                <div><dt>追加</dt><dd>{opmlResult.added}件</dd></div>
-                <div><dt>重複</dt><dd>{opmlResult.duplicates}件</dd></div>
-                <div><dt>失敗</dt><dd>{opmlResult.failed}件</dd></div>
-                <div><dt>新規タグ</dt><dd>{opmlResult.tagsCreated}件</dd></div>
-              </dl>
+              <div className="opml-import-summary">
+                <dl className="opml-import-result" aria-label="OPML取込結果">
+                  <div><dt>追加</dt><dd>{opmlResult.added}件</dd></div>
+                  <div><dt>重複</dt><dd>{opmlResult.duplicates}件</dd></div>
+                  <div><dt>失敗</dt><dd>{opmlResult.failed}件</dd></div>
+                  <div><dt>新規タグ</dt><dd>{opmlResult.tagsCreated}件</dd></div>
+                </dl>
+                {opmlResult.failures.length > 0 && (
+                  <section className="opml-import-failures" aria-label="OPML取込の失敗内容">
+                    <h3>{opmlResult.total}件中{opmlResult.failed}件に対応が必要です</h3>
+                    <SourceFailureList failures={opmlResult.failures} />
+                  </section>
+                )}
+              </div>
             )}
           </section>
 

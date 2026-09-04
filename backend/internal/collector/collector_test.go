@@ -77,6 +77,13 @@ func TestRefreshAllUpdatesOnlyEnabledSources(t *testing.T) {
 	if result.Sources != 2 || result.Refreshed != 1 || result.Added != 1 || result.Failed != 1 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if len(result.Failures) != 1 {
+		t.Fatalf("failures = %#v, want one failure", result.Failures)
+	}
+	failure := result.Failures[0]
+	if failure.SourceID != "failed" || failure.Name != "Failed Feed" || failure.URL != "https://example.com/failed.xml" || failure.Stage != "fetch" || failure.Reason != "unavailable" {
+		t.Fatalf("failure = %#v", failure)
+	}
 	if len(loader.loaded) != 2 {
 		t.Fatalf("unexpected loaded sources: %#v", loader.loaded)
 	}

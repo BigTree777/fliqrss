@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -266,11 +267,19 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 }
 
 type opmlImportResult struct {
-	Total       int `json:"total"`
-	Added       int `json:"added"`
-	Duplicates  int `json:"duplicates"`
-	Failed      int `json:"failed"`
-	TagsCreated int `json:"tagsCreated"`
+	Total       int                 `json:"total"`
+	Added       int                 `json:"added"`
+	Duplicates  int                 `json:"duplicates"`
+	Failed      int                 `json:"failed"`
+	TagsCreated int                 `json:"tagsCreated"`
+	Failures    []opmlImportFailure `json:"failures"`
+}
+
+type opmlImportFailure struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Stage  string `json:"stage"`
+	Reason string `json:"reason"`
 }
 
 func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
@@ -299,7 +308,7 @@ func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := opmlImportResult{Total: len(subscriptions)}
+	result := opmlImportResult{Total: len(subscriptions), Failures: make([]opmlImportFailure, 0)}
 	seenURLs := make(map[string]struct{}, len(subscriptions))
 	jobs := make([]opml.Subscription, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
@@ -312,6 +321,9 @@ func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
 		seenURLs[urlKey] = struct{}{}
 		if err := validateFeedURL(rawURL); err != nil {
 			result.Failed++
+			result.Failures = append(result.Failures, opmlImportFailure{
+				Name: subscription.Title, URL: rawURL, Stage: "validation", Reason: err.Error(),
+			})
 			continue
 		}
 		subscription.XMLURL = rawURL
@@ -327,13 +339,16 @@ func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer workers.Done()
 			for subscription := range jobChannel {
-				tagsCreated, duplicate, err := s.importOPMLSubscription(r.Context(), subscription)
+				tagsCreated, duplicate, stage, err := s.importOPMLSubscription(r.Context(), subscription)
 				resultMutex.Lock()
 				switch {
 				case duplicate:
 					result.Duplicates++
 				case err != nil:
 					result.Failed++
+					result.Failures = append(result.Failures, opmlImportFailure{
+						Name: subscription.Title, URL: subscription.XMLURL, Stage: stage, Reason: err.Error(),
+					})
 				default:
 					result.Added++
 					result.TagsCreated += tagsCreated
@@ -347,6 +362,9 @@ func (s *Server) importOPML(w http.ResponseWriter, r *http.Request) {
 	}
 	close(jobChannel)
 	workers.Wait()
+	sort.Slice(result.Failures, func(i, j int) bool {
+		return result.Failures[i].URL < result.Failures[j].URL
+	})
 
 	writeJSON(w, http.StatusOK, dataResponse{Data: result})
 }
@@ -385,29 +403,29 @@ func (s *Server) exportOPML(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.Subscription) (int, bool, error) {
+func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.Subscription) (int, bool, string, error) {
 	document, err := s.feedLoader.Load(ctx, subscription.XMLURL)
 	if err != nil {
-		return 0, false, err
+		return 0, false, "fetch", err
 	}
 	name := strings.TrimSpace(subscription.Title)
 	if name == "" {
 		name = document.Title
 	}
 	if name == "" {
-		return 0, false, errors.New("feed title is missing")
+		return 0, false, "validation", errors.New("feed title is missing")
 	}
 
 	source, err := s.store.CreateSource(name, subscription.XMLURL, document.Format)
 	if errors.Is(err, store.ErrConflict) {
-		return 0, true, nil
+		return 0, true, "", nil
 	}
 	if err != nil {
-		return 0, false, err
+		return 0, false, "save", err
 	}
 	source, _, err = s.store.UpsertArticles(source.ID, document.Format, feed.ArticlesFromDocument(source, document))
 	if err != nil {
-		return 0, false, err
+		return 0, false, "save", err
 	}
 
 	tagsCreated := 0
@@ -415,7 +433,7 @@ func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.S
 	for _, tagName := range subscription.Tags {
 		tag, created, err := s.store.FindOrCreateTag(tagName)
 		if err != nil {
-			return 0, false, err
+			return 0, false, "save", err
 		}
 		if created {
 			tagsCreated++
@@ -423,9 +441,9 @@ func (s *Server) importOPMLSubscription(ctx context.Context, subscription opml.S
 		tagIDs = append(tagIDs, tag.ID)
 	}
 	if _, err := s.store.SetSourceTags(source.ID, tagIDs); err != nil {
-		return 0, false, err
+		return 0, false, "save", err
 	}
-	return tagsCreated, false, nil
+	return tagsCreated, false, "", nil
 }
 
 func readOPMLPayload(w http.ResponseWriter, r *http.Request) ([]byte, error) {
@@ -588,12 +606,7 @@ func (s *Server) refreshAllSources(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, dataResponse{Data: map[string]int{
-		"sources":   result.Sources,
-		"refreshed": result.Refreshed,
-		"added":     result.Added,
-		"failed":    result.Failed,
-	}})
+	writeJSON(w, http.StatusOK, dataResponse{Data: result})
 }
 
 func (s *Server) setSourceTags(w http.ResponseWriter, r *http.Request) {

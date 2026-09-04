@@ -58,6 +58,15 @@ export interface OPMLImportResult {
   duplicates: number
   failed: number
   tagsCreated: number
+  failures: SourceFailure[]
+}
+
+export interface SourceFailure {
+  sourceId?: string
+  name: string
+  url: string
+  stage: 'validation' | 'fetch' | 'save'
+  reason: string
 }
 
 export interface SourceRefreshResult {
@@ -65,6 +74,7 @@ export interface SourceRefreshResult {
   refreshed: number
   added: number
   failed: number
+  failures: SourceFailure[]
 }
 
 export interface ArticlePageQuery {

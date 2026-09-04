@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,10 +19,19 @@ type Store interface {
 }
 
 type Result struct {
-	Sources   int
-	Refreshed int
-	Added     int
-	Failed    int
+	Sources   int       `json:"sources"`
+	Refreshed int       `json:"refreshed"`
+	Added     int       `json:"added"`
+	Failed    int       `json:"failed"`
+	Failures  []Failure `json:"failures"`
+}
+
+type Failure struct {
+	SourceID string `json:"sourceId"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Stage    string `json:"stage"`
+	Reason   string `json:"reason"`
 }
 
 type Collector struct {
@@ -81,7 +91,7 @@ func (c *Collector) RefreshAll(ctx context.Context) Result {
 			enabled = append(enabled, source)
 		}
 	}
-	result := Result{Sources: len(enabled)}
+	result := Result{Sources: len(enabled), Failures: make([]Failure, 0)}
 	if len(enabled) == 0 {
 		return result
 	}
@@ -89,6 +99,7 @@ func (c *Collector) RefreshAll(ctx context.Context) Result {
 	type outcome struct {
 		source model.Source
 		added  int
+		stage  string
 		err    error
 	}
 	jobs := make(chan model.Source, len(enabled))
@@ -106,16 +117,16 @@ func (c *Collector) RefreshAll(ctx context.Context) Result {
 			defer workers.Done()
 			for source := range jobs {
 				if err := ctx.Err(); err != nil {
-					outcomes <- outcome{source: source, err: err}
+					outcomes <- outcome{source: source, stage: "fetch", err: err}
 					continue
 				}
 				document, err := c.loader.Load(ctx, source.URL)
 				if err != nil {
-					outcomes <- outcome{source: source, err: err}
+					outcomes <- outcome{source: source, stage: "fetch", err: err}
 					continue
 				}
 				_, added, err := c.store.UpsertArticles(source.ID, document.Format, feed.ArticlesFromDocument(source, document))
-				outcomes <- outcome{source: source, added: added, err: err}
+				outcomes <- outcome{source: source, added: added, stage: "save", err: err}
 			}
 		}()
 	}
@@ -125,6 +136,13 @@ func (c *Collector) RefreshAll(ctx context.Context) Result {
 	for outcome := range outcomes {
 		if outcome.err != nil {
 			result.Failed++
+			result.Failures = append(result.Failures, Failure{
+				SourceID: outcome.source.ID,
+				Name:     outcome.source.Name,
+				URL:      outcome.source.URL,
+				Stage:    outcome.stage,
+				Reason:   outcome.err.Error(),
+			})
 			if ctx.Err() == nil {
 				c.logger.Warn("periodic feed refresh failed", "source_id", outcome.source.ID, "source", outcome.source.Name, "error", outcome.err)
 			}
@@ -133,5 +151,8 @@ func (c *Collector) RefreshAll(ctx context.Context) Result {
 		result.Refreshed++
 		result.Added += outcome.added
 	}
+	sort.Slice(result.Failures, func(i, j int) bool {
+		return result.Failures[i].Name < result.Failures[j].Name
+	})
 	return result
 }

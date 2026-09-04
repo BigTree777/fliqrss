@@ -1481,7 +1481,6 @@ kbd {
 }
 
 .opml-import-result {
-  grid-column: 1 / -1;
   margin: 0;
   padding-top: 14px;
   border-top: 1px solid var(--line);
@@ -1505,6 +1504,97 @@ kbd {
   margin: 3px 0 0;
   color: var(--ink);
   font-size: 12px;
+  font-weight: 700;
+}
+
+.opml-import-summary {
+  grid-column: 1 / -1;
+}
+
+.opml-import-failures {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #70443c;
+  border-radius: 10px;
+  background: #382622;
+  color: #ffc3b8;
+}
+
+.opml-import-failures h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+}
+
+.opml-import-failures .source-failure-action b {
+  color: #382622;
+}
+
+.source-failure-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-failure-list li {
+  min-width: 0;
+  padding: 9px 0;
+  border-top: 1px solid currentColor;
+  display: grid;
+  gap: 4px;
+}
+
+.source-failure-list li:first-child {
+  border-top: 0;
+}
+
+.source-failure-list strong {
+  font-size: 11px;
+}
+
+.source-failure-action {
+  margin: 2px 0 3px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.source-failure-action b {
+  margin-right: 7px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: currentColor;
+  color: #fff0ed;
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.source-failure-list details {
+  margin-top: 2px;
+}
+
+.source-failure-list summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 9px;
+  opacity: .75;
+}
+
+.source-failure-list code {
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: inherit;
+  display: block;
+  font-size: 9px;
+  opacity: .8;
+}
+
+.source-failure-list span {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.source-failure-list b {
   font-weight: 700;
 }
 
@@ -2564,6 +2654,78 @@ kbd {
   padding: 5px 14px;
 }
 
+.source-refresh-error {
+  padding: 14px clamp(18px, 5vw, 54px);
+  border-bottom: 1px solid #efb6aa;
+  background: #fff0ed;
+  color: #7e2e20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 24px;
+}
+
+.source-refresh-error > div:first-child {
+  width: min(760px, 100%);
+}
+
+.source-refresh-error > div:first-child > strong {
+  font-size: 13px;
+}
+
+.source-refresh-error p {
+  margin: 4px 0 8px;
+  font-size: 10px;
+}
+
+.source-refresh-error .source-failure-list li {
+  border-top-color: #efb6aa;
+}
+
+.source-refresh-error-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.source-refresh-error-actions button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: #7e2e20;
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.source-refresh-error-actions button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+.source-refresh-error-actions button:last-child {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+
+@media (max-width: 640px) {
+  .source-refresh-error {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .source-refresh-error-actions {
+    justify-content: flex-end;
+  }
+}
+
 /* Keep the desktop cursor neutral instead of showing hand-shaped click/drag cursors. */
 button:not(:disabled),
 a,
@@ -2715,4 +2877,22 @@ html[data-theme='dark'] {
 [data-theme='dark'] .api-error button {
   background: #a94f40;
   color: #ffffff;
+}
+
+[data-theme='dark'] .source-refresh-error {
+  border-bottom-color: #743f38;
+  background: #40241f;
+  color: #ffb9ac;
+}
+
+[data-theme='dark'] .source-refresh-error .source-failure-list li {
+  border-top-color: #743f38;
+}
+
+[data-theme='dark'] .source-refresh-error-actions button {
+  background: #a94f40;
+}
+
+[data-theme='dark'] .source-refresh-error .source-failure-action b {
+  color: #40241f;
 }

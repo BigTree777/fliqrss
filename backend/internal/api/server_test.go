@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -370,14 +371,51 @@ func TestRefreshAllSources(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("refresh all status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
-	result := decodeData[map[string]int](t, response)
-	if result["sources"] != 6 || result["refreshed"] != 6 || result["added"] != 6 || result["failed"] != 0 {
+	result := decodeData[struct {
+		Sources   int `json:"sources"`
+		Refreshed int `json:"refreshed"`
+		Added     int `json:"added"`
+		Failed    int `json:"failed"`
+		Failures  []struct {
+			Name   string `json:"name"`
+			URL    string `json:"url"`
+			Stage  string `json:"stage"`
+			Reason string `json:"reason"`
+		} `json:"failures"`
+	}](t, response)
+	if result.Sources != 6 || result.Refreshed != 6 || result.Added != 6 || result.Failed != 0 || len(result.Failures) != 0 {
 		t.Fatalf("refresh all response = %+v", result)
 	}
 
 	articles := fixture.memory.ListArticles(model.ArticleFilter{State: "all"})
 	if len(articles) != 7 {
 		t.Fatalf("visible articles after duplicate reconciliation = %d, want 7", len(articles))
+	}
+}
+
+func TestRefreshAllSourcesReportsFailureDetails(t *testing.T) {
+	fixture := newTestFixture(t)
+	server := NewServerWithFeedLoader(fixture.memory, "", staticFeedLoader{err: errors.New("upstream unavailable")})
+
+	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/refresh", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("refresh all status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	result := decodeData[struct {
+		Failed   int `json:"failed"`
+		Failures []struct {
+			SourceID string `json:"sourceId"`
+			Name     string `json:"name"`
+			URL      string `json:"url"`
+			Stage    string `json:"stage"`
+			Reason   string `json:"reason"`
+		} `json:"failures"`
+	}](t, response)
+	if result.Failed != 6 || len(result.Failures) != 6 {
+		t.Fatalf("refresh failures = %+v", result)
+	}
+	if failure := result.Failures[0]; failure.SourceID == "" || failure.Name == "" || failure.URL == "" || failure.Stage != "fetch" || failure.Reason != "upstream unavailable" {
+		t.Fatalf("refresh failure = %+v", failure)
 	}
 }
 
@@ -404,6 +442,9 @@ func TestImportOPML(t *testing.T) {
 	result := decodeData[opmlImportResult](t, response)
 	if result.Total != 3 || result.Added != 1 || result.Duplicates != 1 || result.Failed != 1 || result.TagsCreated != 1 {
 		t.Fatalf("import result = %+v", result)
+	}
+	if len(result.Failures) != 1 || result.Failures[0].Name != "Invalid" || result.Failures[0].URL != "file:///etc/passwd" || result.Failures[0].Stage != "validation" || result.Failures[0].Reason != "url must be an absolute HTTP or HTTPS URL" {
+		t.Fatalf("import failures = %+v", result.Failures)
 	}
 
 	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/sources", nil)
