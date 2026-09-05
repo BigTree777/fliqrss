@@ -61,6 +61,9 @@ func (s *Memory) ListArticles(filter model.ArticleFilter) []model.Article {
 		if filter.Untagged && len(article.TagIDs) != 0 {
 			continue
 		}
+		if !isPublishedAfter(article, filter.PublishedAfter) {
+			continue
+		}
 		if !matchesArticleState(article.State, filter.State) {
 			continue
 		}
@@ -106,7 +109,7 @@ func (s *Memory) ListArticlePage(filter model.ArticleFilter, cursor string, limi
 	return page, nil
 }
 
-func (s *Memory) ArticleStats() model.ArticleStats {
+func (s *Memory) ArticleStats(publishedAfter time.Time) model.ArticleStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	stats := model.ArticleStats{
@@ -119,7 +122,7 @@ func (s *Memory) ArticleStats() model.ArticleStats {
 		if article.DuplicateOfID != "" {
 			continue
 		}
-		if matchesArticleState(article.State, "feed") {
+		if matchesArticleState(article.State, "feed") && isPublishedAfter(article, publishedAfter) {
 			stats.Feed++
 			stats.SourceFeedCounts[article.SourceID]++
 			if len(article.TagIDs) == 0 {
@@ -170,7 +173,23 @@ func matchesArticleFilter(article model.Article, filter model.ArticleFilter) boo
 	if filter.Untagged && len(article.TagIDs) != 0 {
 		return false
 	}
+	if !isPublishedAfter(article, filter.PublishedAfter) {
+		return false
+	}
 	return matchesArticleState(article.State, filter.State)
+}
+
+func isPublishedAfter(article model.Article, cutoff time.Time) bool {
+	if cutoff.IsZero() {
+		return true
+	}
+	publishedAt, err := time.Parse(time.RFC3339, article.PublishedAt)
+	if err != nil {
+		// Keep articles with an invalid legacy timestamp visible instead of
+		// silently losing them from the feed.
+		return true
+	}
+	return publishedAt.After(cutoff)
 }
 
 func matchesArticleState(state model.ArticleState, requested string) bool {
@@ -252,13 +271,13 @@ func applyArticleAction(state model.ArticleState, action model.ArticleAction) (m
 	return state, nil
 }
 
-func (s *Memory) MarkAllRead(sourceID string) (int, error) {
+func (s *Memory) MarkAllRead(sourceID string, publishedAfter time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	count := 0
 	for id, article := range s.articles {
-		if (sourceID != "" && article.SourceID != sourceID) || article.DuplicateOfID != "" || !matchesArticleState(article.State, "feed") {
+		if (sourceID != "" && article.SourceID != sourceID) || article.DuplicateOfID != "" || !matchesArticleState(article.State, "feed") || !isPublishedAfter(article, publishedAfter) {
 			continue
 		}
 		article.State.Read = true

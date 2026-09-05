@@ -10,6 +10,7 @@ type FilterMode = 'source' | 'tag'
 type SwipeAction = 'skip' | 'save'
 type LibraryMode = 'favorite' | 'saved' | 'deleted'
 type ColorTheme = 'light' | 'dark'
+type FeedMaxAgeDays = 0 | 1 | 3 | 5 | 7
 
 const ALL_TAGS = '__all__'
 const UNTAGGED = '__untagged__'
@@ -19,6 +20,15 @@ const FEED_PAGE_SIZE = 20
 const PREFETCH_THRESHOLD = 5
 const LIBRARY_PAGE_SIZE = 50
 const THEME_STORAGE_KEY = 'fliqrss.theme'
+const FEED_MAX_AGE_STORAGE_KEY = 'fliqrss.feedMaxAgeDays'
+const DEFAULT_FEED_MAX_AGE_DAYS: FeedMaxAgeDays = 5
+const FEED_MAX_AGE_OPTIONS: { value: FeedMaxAgeDays; label: string }[] = [
+  { value: 1, label: '1日' },
+  { value: 3, label: '3日' },
+  { value: 5, label: '5日' },
+  { value: 7, label: '7日' },
+  { value: 0, label: '無制限' },
+]
 
 function storedTheme(): ColorTheme | null {
   try {
@@ -32,6 +42,18 @@ function storedTheme(): ColorTheme | null {
 function initialTheme(): ColorTheme {
   if (document.documentElement.dataset.theme === 'dark') return 'dark'
   return 'light'
+}
+
+function storedFeedMaxAgeDays(): FeedMaxAgeDays {
+  try {
+    const storedValue = window.localStorage.getItem(FEED_MAX_AGE_STORAGE_KEY)
+    if (storedValue === null) return DEFAULT_FEED_MAX_AGE_DAYS
+    const value = Number(storedValue)
+    if (value === 0 || value === 1 || value === 3 || value === 5 || value === 7) return value
+  } catch {
+    // Use the default when storage is unavailable.
+  }
+  return DEFAULT_FEED_MAX_AGE_DAYS
 }
 
 const emptyArticleStats: ArticleStats = {
@@ -146,6 +168,7 @@ function SourceFailureList({ failures }: { failures: SourceFailure[] }) {
 
 function App() {
   const [theme, setTheme] = useState<ColorTheme>(initialTheme)
+  const [feedMaxAgeDays, setFeedMaxAgeDays] = useState<FeedMaxAgeDays>(storedFeedMaxAgeDays)
   const [filterMode, setFilterMode] = useState<FilterMode>('source')
   const [source, setSource] = useState(ALL_SOURCES)
   const [articles, setArticles] = useState<Article[]>([])
@@ -268,6 +291,17 @@ function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(''), 1800)
   }, [])
 
+  const changeFeedMaxAge = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextValue = Number(event.target.value) as FeedMaxAgeDays
+    try {
+      window.localStorage.setItem(FEED_MAX_AGE_STORAGE_KEY, String(nextValue))
+    } catch {
+      // The selected period still applies for this session when storage is unavailable.
+    }
+    setFeedMaxAgeDays(nextValue)
+    showNotice(nextValue ? `表示期間を${nextValue}日に変更しました` : '表示期間を無制限に変更しました')
+  }
+
   const showApiError = useCallback((error: unknown) => {
     const message = error instanceof ApiError
       ? error.message
@@ -279,19 +313,20 @@ function App() {
   }, [showNotice])
 
   const refreshStats = useCallback(async () => {
-    const nextStats = await api.articleStats()
+    const nextStats = await api.articleStats(feedMaxAgeDays || undefined)
     setArticleStats(nextStats)
     return nextStats
-  }, [])
+  }, [feedMaxAgeDays])
 
   const feedPageQuery = useCallback((cursor?: string) => ({
     state: 'feed' as const,
     sourceId: filterMode === 'source' && source !== ALL_SOURCES ? source : undefined,
     tagId: filterMode === 'tag' && tag !== ALL_TAGS && tag !== UNTAGGED ? tag : undefined,
     untagged: filterMode === 'tag' && tag === UNTAGGED,
+    maxAgeDays: feedMaxAgeDays || undefined,
     cursor,
     limit: FEED_PAGE_SIZE,
-  }), [filterMode, source, tag])
+  }), [feedMaxAgeDays, filterMode, source, tag])
 
   const loadFeed = useCallback(async () => {
     const requestID = ++feedRequestID.current
@@ -318,7 +353,7 @@ function App() {
       const [nextSources, nextTags, nextStats] = await Promise.all([
         api.listSources(),
         api.listTags(),
-        api.articleStats(),
+        api.articleStats(feedMaxAgeDays || undefined),
       ])
       setManagedSources(nextSources)
       setManagedTags(nextTags)
@@ -327,7 +362,7 @@ function App() {
     } catch (error) {
       showApiError(error)
     }
-  }, [showApiError])
+  }, [feedMaxAgeDays, showApiError])
 
   const replaceArticle = useCallback((nextArticle: Article) => {
     setArticles((current) => current.map((item) => item.id === nextArticle.id ? nextArticle : item))
@@ -800,7 +835,7 @@ function App() {
     if (!window.confirm(`${sourceName}の未読記事${unreadCount}件をすべて既読にしますか？`)) return
     setMarkingSourceId(sourceId)
     try {
-      const result = await api.markAllRead(sourceId)
+      const result = await api.markAllRead(sourceId, feedMaxAgeDays || undefined)
       setMenuOpen(false)
       setDragX(0)
       await Promise.all([loadFeed(), refreshStats()])
@@ -1096,6 +1131,15 @@ function App() {
                   <strong>{articleStats.deleted}</strong>
                 </a>
                 <span className="main-menu-divider" />
+                <div className="feed-age-setting">
+                  <Icon name="clock" size={19} />
+                  <label htmlFor="feed-max-age">表示期間</label>
+                  <select id="feed-max-age" onChange={changeFeedMaxAge} value={feedMaxAgeDays}>
+                    {FEED_MAX_AGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   aria-label={`${theme === 'dark' ? 'ライト' : 'ダーク'}モードに切り替える`}
                   aria-pressed={theme === 'dark'}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"fliqrss/backend/internal/feed"
 	"fliqrss/backend/internal/model"
@@ -158,6 +159,42 @@ func TestArticleStats(t *testing.T) {
 	}
 	if stats.SourceSkippedCounts[fixture.sources["orbit"]] != 1 {
 		t.Fatalf("source skipped counts = %+v", stats.SourceSkippedCounts)
+	}
+}
+
+func TestArticleMaxAgeDays(t *testing.T) {
+	memory := store.NewMemory()
+	source, err := memory.CreateSource("Example", "https://example.com/feed.xml", "rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	articles := []model.Article{
+		{ID: "recent", PublishedAt: now.Add(-48 * time.Hour).Format(time.RFC3339), URL: "https://example.com/recent"},
+		{ID: "old", PublishedAt: now.Add(-6 * 24 * time.Hour).Format(time.RFC3339), URL: "https://example.com/old"},
+	}
+	if _, _, err := memory.UpsertArticles(source.ID, "rss", articles); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(memory, "")
+
+	response := performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?state=feed&maxAgeDays=5", nil)
+	page := decodeData[model.ArticlePage](t, response)
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "recent" {
+		t.Fatalf("filtered page = %+v", page)
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/stats?maxAgeDays=5", nil)
+	stats := decodeData[model.ArticleStats](t, response)
+	if stats.Feed != 1 || stats.SourceFeedCounts[source.ID] != 1 {
+		t.Fatalf("filtered stats = %+v", stats)
+	}
+	response = performRequest(t, server.Handler(), http.MethodPost, "/api/v1/articles/mark-all-read?sourceId="+source.ID+"&maxAgeDays=5", nil)
+	if marked := decodeData[map[string]int](t, response)["markedRead"]; marked != 1 {
+		t.Fatalf("marked read = %d, want 1", marked)
+	}
+	response = performRequest(t, server.Handler(), http.MethodGet, "/api/v1/articles/page?maxAgeDays=0", nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid maxAgeDays status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
 }
 

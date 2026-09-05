@@ -237,7 +237,8 @@ a:focus-visible {
 }
 
 .main-menu a,
-.main-menu .theme-toggle {
+.main-menu .theme-toggle,
+.feed-age-setting {
   width: 100%;
   min-height: 46px;
   padding: 0 11px;
@@ -254,6 +255,18 @@ a:focus-visible {
   font-weight: 600;
   text-align: left;
   text-decoration: none;
+}
+
+.feed-age-setting select {
+  max-width: 92px;
+  height: 30px;
+  padding: 0 25px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
 }
 
 .main-menu a:hover,

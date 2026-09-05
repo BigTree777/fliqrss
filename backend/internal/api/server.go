@@ -127,8 +127,12 @@ func (s *Server) listArticlePage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dataResponse{Data: page})
 }
 
-func (s *Server) articleStats(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, dataResponse{Data: s.store.ArticleStats()})
+func (s *Server) articleStats(w http.ResponseWriter, r *http.Request) {
+	publishedAfter, ok := publishedAfterFromRequest(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, dataResponse{Data: s.store.ArticleStats(publishedAfter)})
 }
 
 func articleFilterFromRequest(w http.ResponseWriter, r *http.Request) (model.ArticleFilter, bool) {
@@ -146,12 +150,30 @@ func articleFilterFromRequest(w http.ResponseWriter, r *http.Request) (model.Art
 		}
 		untagged = parsed
 	}
+	publishedAfter, ok := publishedAfterFromRequest(w, r)
+	if !ok {
+		return model.ArticleFilter{}, false
+	}
 	return model.ArticleFilter{
-		SourceID: r.URL.Query().Get("sourceId"),
-		TagID:    r.URL.Query().Get("tagId"),
-		Untagged: untagged,
-		State:    state,
+		SourceID:       r.URL.Query().Get("sourceId"),
+		TagID:          r.URL.Query().Get("tagId"),
+		Untagged:       untagged,
+		State:          state,
+		PublishedAfter: publishedAfter,
 	}, true
+}
+
+func publishedAfterFromRequest(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
+	rawDays := r.URL.Query().Get("maxAgeDays")
+	if rawDays == "" {
+		return time.Time{}, true
+	}
+	days, err := strconv.Atoi(rawDays)
+	if err != nil || days < 1 || days > 3650 {
+		writeError(w, http.StatusBadRequest, "invalid_max_age_days", "maxAgeDays must be between 1 and 3650")
+		return time.Time{}, false
+	}
+	return time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour), true
 }
 
 func validArticleStateFilter(state string) bool {
@@ -195,7 +217,11 @@ func (s *Server) markAllRead(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	count, err := s.store.MarkAllRead(sourceID)
+	publishedAfter, ok := publishedAfterFromRequest(w, r)
+	if !ok {
+		return
+	}
+	count, err := s.store.MarkAllRead(sourceID, publishedAfter)
 	if err != nil {
 		writeStoreError(w, err)
 		return

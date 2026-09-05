@@ -1,14 +1,18 @@
 package store
 
-import "fliqrss/backend/internal/model"
+import (
+	"time"
+
+	"fliqrss/backend/internal/model"
+)
 
 type Repository interface {
 	ListArticles(model.ArticleFilter) []model.Article
 	ListArticlePage(model.ArticleFilter, string, int) (model.ArticlePage, error)
-	ArticleStats() model.ArticleStats
+	ArticleStats(time.Time) model.ArticleStats
 	GetArticle(string) (model.Article, error)
 	ApplyArticleAction(string, model.ArticleAction) (model.Article, error)
-	MarkAllRead(string) (int, error)
+	MarkAllRead(string, time.Time) (int, error)
 	ResetSkipped(string) (int, error)
 
 	ListSources() []model.Source

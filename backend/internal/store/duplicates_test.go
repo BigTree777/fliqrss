@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"fliqrss/backend/internal/model"
 )
@@ -55,7 +56,7 @@ func TestMemoryDetectsDuplicateArticlesAcrossSources(t *testing.T) {
 	if len(visible) != 1 || visible[0].ID != first.ID {
 		t.Fatalf("visible articles = %+v, want only %s", visible, first.ID)
 	}
-	stats := memory.ArticleStats()
+	stats := memory.ArticleStats(time.Time{})
 	if stats.Feed != 1 || stats.SourceFeedCounts[firstSource.ID] != 1 || stats.SourceFeedCounts[secondSource.ID] != 0 {
 		t.Fatalf("duplicate-aware stats = %+v", stats)
 	}

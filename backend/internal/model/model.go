@@ -53,10 +53,11 @@ type Tag struct {
 }
 
 type ArticleFilter struct {
-	SourceID string
-	TagID    string
-	Untagged bool
-	State    string
+	SourceID       string
+	TagID          string
+	Untagged       bool
+	State          string
+	PublishedAfter time.Time
 }
 
 type ArticlePage struct {

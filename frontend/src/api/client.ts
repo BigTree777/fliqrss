@@ -82,6 +82,7 @@ export interface ArticlePageQuery {
   sourceId?: string
   tagId?: string
   untagged?: boolean
+  maxAgeDays?: number
   cursor?: string
   limit?: number
 }
@@ -93,18 +94,23 @@ function articlePagePath(query: ArticlePageQuery): string {
   if (query.sourceId) parameters.set('sourceId', query.sourceId)
   if (query.tagId) parameters.set('tagId', query.tagId)
   if (query.untagged) parameters.set('untagged', 'true')
+  if (query.maxAgeDays) parameters.set('maxAgeDays', String(query.maxAgeDays))
   if (query.cursor) parameters.set('cursor', query.cursor)
   return `/articles/page?${parameters.toString()}`
 }
 
 export const api = {
   listArticlePage: (query: ArticlePageQuery) => request<ArticlePage>(articlePagePath(query)),
-  articleStats: () => request<ArticleStats>('/articles/stats'),
+  articleStats: (maxAgeDays?: number) => request<ArticleStats>(maxAgeDays ? `/articles/stats?maxAgeDays=${maxAgeDays}` : '/articles/stats'),
   updateArticleState: (id: string, action: ArticleAction) => request<Article>(`/articles/${encodeURIComponent(id)}/state`, {
     method: 'PATCH',
     body: JSON.stringify({ action }),
   }),
-  markAllRead: (sourceId: string) => request<{ markedRead: number }>(`/articles/mark-all-read?sourceId=${encodeURIComponent(sourceId)}`, { method: 'POST' }),
+  markAllRead: (sourceId: string, maxAgeDays?: number) => {
+    const parameters = new URLSearchParams({ sourceId })
+    if (maxAgeDays) parameters.set('maxAgeDays', String(maxAgeDays))
+    return request<{ markedRead: number }>(`/articles/mark-all-read?${parameters.toString()}`, { method: 'POST' })
+  },
   resetSkipped: (sourceId: string) => request<{ restored: number }>(`/articles/reset-skipped?sourceId=${encodeURIComponent(sourceId)}`, { method: 'POST' }),
 
   listSources: () => request<Source[]>('/sources'),

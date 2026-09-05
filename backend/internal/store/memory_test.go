@@ -2,6 +2,7 @@ package store
 
 import (
 	"testing"
+	"time"
 
 	"fliqrss/backend/internal/model"
 )
@@ -16,6 +17,39 @@ func TestNewMemoryStartsEmpty(t *testing.T) {
 	}
 	if tags := memory.ListTags(); len(tags) != 0 {
 		t.Fatalf("initial tags = %d, want 0", len(tags))
+	}
+}
+
+func TestPublishedAfterFiltersFeedStatsAndMarkAllRead(t *testing.T) {
+	memory := NewMemory()
+	source, err := memory.CreateSource("Example", "https://example.com/feed.xml", "rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+	articles := []model.Article{
+		{ID: "recent", PublishedAt: cutoff.Add(time.Hour).Format(time.RFC3339), URL: "https://example.com/recent"},
+		{ID: "old", PublishedAt: cutoff.Format(time.RFC3339), URL: "https://example.com/old"},
+	}
+	if _, _, err := memory.UpsertArticles(source.ID, "rss", articles); err != nil {
+		t.Fatal(err)
+	}
+
+	filter := model.ArticleFilter{State: "feed", PublishedAfter: cutoff}
+	page, err := memory.ListArticlePage(filter, "", 20)
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "recent" {
+		t.Fatalf("filtered page = %+v, err=%v", page, err)
+	}
+	stats := memory.ArticleStats(cutoff)
+	if stats.Feed != 1 || stats.SourceFeedCounts[source.ID] != 1 {
+		t.Fatalf("filtered stats = %+v", stats)
+	}
+	if count, err := memory.MarkAllRead(source.ID, cutoff); err != nil || count != 1 {
+		t.Fatalf("mark all read: count=%d, err=%v", count, err)
+	}
+	old, err := memory.GetArticle("old")
+	if err != nil || old.State.Read {
+		t.Fatalf("old article was unexpectedly marked read: %+v, err=%v", old.State, err)
 	}
 }
 
@@ -83,7 +117,7 @@ func TestMarkAllReadOnlyMarksVisibleFeedArticles(t *testing.T) {
 		}
 	}
 
-	count, err := memory.MarkAllRead(source.ID)
+	count, err := memory.MarkAllRead(source.ID, time.Time{})
 	if err != nil || count != 2 {
 		t.Fatalf("mark all read: count=%d, err=%v", count, err)
 	}

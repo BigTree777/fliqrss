@@ -84,8 +84,8 @@ func (s *PostgreSQL) ListArticlePage(filter model.ArticleFilter, cursor string, 
 	return s.memory.ListArticlePage(filter, cursor, limit)
 }
 
-func (s *PostgreSQL) ArticleStats() model.ArticleStats {
-	return s.memory.ArticleStats()
+func (s *PostgreSQL) ArticleStats(publishedAfter time.Time) model.ArticleStats {
+	return s.memory.ArticleStats(publishedAfter)
 }
 
 func (s *PostgreSQL) GetArticle(id string) (model.Article, error) {
@@ -132,18 +132,23 @@ func (s *PostgreSQL) ApplyArticleAction(id string, action model.ArticleAction) (
 	return s.memory.ApplyArticleAction(id, action)
 }
 
-func (s *PostgreSQL) MarkAllRead(sourceID string) (int, error) {
+func (s *PostgreSQL) MarkAllRead(sourceID string, publishedAfter time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel := s.operationContext()
 	defer cancel()
+	cutoff := ""
+	if !publishedAfter.IsZero() {
+		cutoff = publishedAfter.UTC().Format(time.RFC3339)
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE articles SET is_read=TRUE, is_skipped=FALSE
-		WHERE ($1='' OR source_id=$1) AND duplicate_of_id='' AND is_read=FALSE AND is_saved=FALSE AND is_deleted=FALSE`, sourceID)
+		WHERE ($1='' OR source_id=$1) AND duplicate_of_id='' AND is_read=FALSE AND is_saved=FALSE AND is_deleted=FALSE
+		AND ($2='' OR published_at='' OR published_at>$2)`, sourceID, cutoff)
 	if err != nil {
 		return 0, err
 	}
 	count, _ := result.RowsAffected()
-	_, _ = s.memory.MarkAllRead(sourceID)
+	_, _ = s.memory.MarkAllRead(sourceID, publishedAfter)
 	return int(count), nil
 }
 

@@ -102,9 +102,11 @@ docker compose --profile test run --rm backend-test
 | PATCH | `/api/v1/tags/{id}` | タグ名変更 |
 | DELETE | `/api/v1/tags/{id}` | タグ削除 |
 
-記事一覧は`sourceId`, `tagId`, `untagged`, `state`で絞り込める.
+記事一覧は`sourceId`, `tagId`, `untagged`, `state`, `maxAgeDays`で絞り込める.
 `state`には`feed`, `all`, `favorite`, `saved`, `deleted`, `read`を指定できる.
 省略時は`feed`となり, 未読かつ保存されておらず, ゴミ箱に入っていない記事だけを返す.
+`maxAgeDays`には1から3650の日数を指定でき, 現在から指定日数より新しい記事だけを返す.
+`/api/v1/articles/stats`と`/api/v1/articles/mark-all-read`でも同じ指定を利用できる.
 
 `/api/v1/articles/page`では`limit`に1から100を指定でき, 省略時は20件を返す.
 レスポンスの`nextCursor`を次のリクエストの`cursor`へ指定すると, 続きの記事を取得できる.

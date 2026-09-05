@@ -147,7 +147,7 @@ func TestPostgreSQLPersistsData(t *testing.T) {
 	if _, added, err := repository.UpsertArticles(source.ID, "rss", []model.Article{unread}); err != nil || added != 1 {
 		t.Fatalf("upsert unread article: added=%d, err=%v", added, err)
 	}
-	if count, err := repository.MarkAllRead(source.ID); err != nil || count != 1 {
+	if count, err := repository.MarkAllRead(source.ID, time.Time{}); err != nil || count != 1 {
 		t.Fatalf("mark all read: count=%d, err=%v", count, err)
 	}
 	unread, err = repository.GetArticle(unread.ID)
