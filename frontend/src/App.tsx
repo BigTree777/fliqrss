@@ -91,7 +91,7 @@ const failureStageLabels: Record<SourceFailure['stage'], string> = {
 function recommendedAction(failure: SourceFailure): string {
   const reason = failure.reason.toLowerCase()
   const retry = failure.sourceId
-    ? '「再試行」を押してください。'
+    ? '「すべて再取得」を押してください。'
     : '同じOPMLファイルを選択し直して、もう一度取り込んでください。'
   const replaceURL = failure.sourceId
     ? '配信元で現在のRSS/Atom URLを確認し、このソースを削除して正しいURLで追加し直してください。'
@@ -141,6 +141,9 @@ function recommendedAction(failure: SourceFailure): string {
   }
   if (reason.includes('connection refused') || reason.includes('connection reset') || reason.includes('network is unreachable')) {
     return `配信元に接続できません。しばらく時間を置いてから、${retry}${failure.sourceId ? '繰り返す場合はこのソースを停止してください。' : ''}`
+  }
+  if (reason.includes('retry phase time limit reached')) {
+    return `自動再取得の時間上限に達しました。しばらく時間を置いてから、${retry}`
   }
   if (reason.includes('xml') || reason.includes('unexpected eof')) {
     return `配信元のフィードが壊れています。しばらく時間を置いてから、${retry}直らない場合は別のRSS/Atom URLに差し替えてください。`
@@ -586,7 +589,9 @@ function App() {
       if (result.failed) {
         return
       } else {
-        showNotice(`${result.refreshed}件のニュースソースを更新しました`)
+        showNotice(result.recovered
+          ? `${result.refreshed}件を更新しました（${result.recovered}件は再取得で回復）`
+          : `${result.refreshed}件のニュースソースを更新しました`)
       }
     } catch (error) {
       showApiError(error)
@@ -1169,6 +1174,7 @@ function App() {
         <section className="source-refresh-error" role="alert" aria-label="ニュースソース更新の失敗内容">
           <div>
             <strong>{sourceRefreshResult.sources}件中{sourceRefreshResult.failed}件に対応が必要です</strong>
+            {sourceRefreshResult.recovered > 0 && <p>{sourceRefreshResult.recovered}件は再取得で回復しました.</p>}
             <p>ニュースソースごとの推奨操作を確認してください.</p>
             <SourceFailureList failures={sourceRefreshResult.failures} />
           </div>
@@ -1177,7 +1183,7 @@ function App() {
               <Icon name="rss" size={16} />ソース設定
             </button>
             <button disabled={refreshingSources} onClick={() => void refreshAllSources()} type="button">
-              <Icon name="refresh" size={16} />再試行
+              <Icon name="refresh" size={16} />すべて再取得
             </button>
             <button aria-label="失敗内容を閉じる" onClick={() => setSourceRefreshResult(null)} title="閉じる" type="button">
               <Icon name="close" size={16} />

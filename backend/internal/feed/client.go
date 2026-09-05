@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	DefaultMaxBytes = 5 << 20
-	maxRedirects    = 5
+	DefaultMaxBytes       = 5 << 20
+	DefaultRequestTimeout = 12 * time.Second
+	maxRedirects          = 5
 )
 
 var (
@@ -40,7 +41,6 @@ func NewClient() *Client {
 	transport.DialContext = client.dialContext
 	client.httpClient = &http.Client{
 		Transport: transport,
-		Timeout:   12 * time.Second,
 		CheckRedirect: func(request *http.Request, previous []*http.Request) error {
 			if len(previous) >= maxRedirects {
 				return errors.New("too many redirects")
@@ -52,6 +52,11 @@ func NewClient() *Client {
 }
 
 func (c *Client) Load(ctx context.Context, rawURL string) (Document, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultRequestTimeout)
+		defer cancel()
+	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return Document{}, fmt.Errorf("parse feed URL: %w", err)

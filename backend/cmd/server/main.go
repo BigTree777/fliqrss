@@ -39,7 +39,7 @@ func main() {
 		Handler:           application.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      6 * time.Minute,
+		WriteTimeout:      7 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
 

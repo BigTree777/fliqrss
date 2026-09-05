@@ -409,18 +409,22 @@ func TestRefreshAllSources(t *testing.T) {
 		t.Fatalf("refresh all status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
 	result := decodeData[struct {
-		Sources   int `json:"sources"`
-		Refreshed int `json:"refreshed"`
-		Added     int `json:"added"`
-		Failed    int `json:"failed"`
-		Failures  []struct {
+		Sources          int `json:"sources"`
+		Refreshed        int `json:"refreshed"`
+		Added            int `json:"added"`
+		Failed           int `json:"failed"`
+		InitialRefreshed int `json:"initialRefreshed"`
+		InitialFailed    int `json:"initialFailed"`
+		Retried          int `json:"retried"`
+		Recovered        int `json:"recovered"`
+		Failures         []struct {
 			Name   string `json:"name"`
 			URL    string `json:"url"`
 			Stage  string `json:"stage"`
 			Reason string `json:"reason"`
 		} `json:"failures"`
 	}](t, response)
-	if result.Sources != 6 || result.Refreshed != 6 || result.Added != 6 || result.Failed != 0 || len(result.Failures) != 0 {
+	if result.Sources != 6 || result.Refreshed != 6 || result.Added != 6 || result.Failed != 0 || result.InitialRefreshed != 6 || result.InitialFailed != 0 || result.Retried != 0 || result.Recovered != 0 || len(result.Failures) != 0 {
 		t.Fatalf("refresh all response = %+v", result)
 	}
 
@@ -432,6 +436,13 @@ func TestRefreshAllSources(t *testing.T) {
 
 func TestRefreshAllSourcesReportsFailureDetails(t *testing.T) {
 	fixture := newTestFixture(t)
+	disabled := false
+	sources := fixture.memory.ListSources()
+	for _, source := range sources[1:] {
+		if _, err := fixture.memory.UpdateSource(source.ID, nil, &disabled); err != nil {
+			t.Fatal(err)
+		}
+	}
 	server := NewServerWithFeedLoader(fixture.memory, "", staticFeedLoader{err: errors.New("upstream unavailable")})
 
 	response := performRequest(t, server.Handler(), http.MethodPost, "/api/v1/sources/refresh", nil)
@@ -439,8 +450,10 @@ func TestRefreshAllSourcesReportsFailureDetails(t *testing.T) {
 		t.Fatalf("refresh all status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
 	result := decodeData[struct {
-		Failed   int `json:"failed"`
-		Failures []struct {
+		Failed        int `json:"failed"`
+		InitialFailed int `json:"initialFailed"`
+		Retried       int `json:"retried"`
+		Failures      []struct {
 			SourceID string `json:"sourceId"`
 			Name     string `json:"name"`
 			URL      string `json:"url"`
@@ -448,7 +461,7 @@ func TestRefreshAllSourcesReportsFailureDetails(t *testing.T) {
 			Reason   string `json:"reason"`
 		} `json:"failures"`
 	}](t, response)
-	if result.Failed != 6 || len(result.Failures) != 6 {
+	if result.Failed != 1 || result.InitialFailed != 1 || result.Retried != 1 || len(result.Failures) != 1 {
 		t.Fatalf("refresh failures = %+v", result)
 	}
 	if failure := result.Failures[0]; failure.SourceID == "" || failure.Name == "" || failure.URL == "" || failure.Stage != "fetch" || failure.Reason != "upstream unavailable" {

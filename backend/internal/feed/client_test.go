@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateURLRejectsPrivateAddresses(t *testing.T) {
@@ -74,6 +75,37 @@ func TestLoadParsesRSSResponse(t *testing.T) {
 	}
 	if document.Format != "rss" || len(document.Entries) != 1 || document.Entries[0].Title != "Fetched article" {
 		t.Fatalf("document = %+v", document)
+	}
+}
+
+func TestLoadKeepsCallerDeadline(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://8.8.8.8/feed.xml", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining time.Duration
+	client := &Client{
+		maxBytes: DefaultMaxBytes,
+		httpClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			deadline, ok := request.Context().Deadline()
+			if !ok {
+				return nil, errors.New("request context has no deadline")
+			}
+			remaining = time.Until(deadline)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<rss version="2.0"><channel><title>Feed</title></channel></rss>`)),
+				Request:    request,
+			}, nil
+		})},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := client.Load(ctx, request.URL.String()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if remaining < 70*time.Millisecond || remaining > 100*time.Millisecond {
+		t.Fatalf("request deadline = %v, want approximately 100ms", remaining)
 	}
 }
 

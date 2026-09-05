@@ -74,6 +74,10 @@ export interface SourceRefreshResult {
   refreshed: number
   added: number
   failed: number
+  initialRefreshed: number
+  initialFailed: number
+  retried: number
+  recovered: number
   failures: SourceFailure[]
 }
 
