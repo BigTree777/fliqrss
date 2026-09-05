@@ -501,10 +501,16 @@ a:focus-visible {
 .keyboard-help {
   margin-top: 34px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 12px;
   color: var(--muted);
   font-size: 10px;
+}
+
+.keyboard-help-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 kbd {

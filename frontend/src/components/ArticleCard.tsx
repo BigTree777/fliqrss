@@ -179,11 +179,12 @@ export function ArticleCard({
           </button>
           <button
             aria-label={isFavorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+            aria-keyshortcuts="F"
             aria-pressed={isFavorite}
             className={`card-icon-button card-icon-button--favorite ${isFavorite ? 'is-active' : ''}`}
             onClick={onToggleFavorite}
             onPointerDown={(event) => event.stopPropagation()}
-            title={isFavorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+            title={isFavorite ? 'お気に入りから外す（F）' : 'お気に入りに追加（F）'}
             type="button"
           >
             <Icon name="star" size={24} />

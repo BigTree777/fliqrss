@@ -228,6 +228,7 @@ function App() {
   const feedRequestID = useRef(0)
   const libraryRequestID = useRef(0)
   const deletingArticleIds = useRef(new Set<string>())
+  const favoriteArticleIds = useRef(new Set<string>())
 
   useEffect(() => {
     const root = document.documentElement
@@ -783,18 +784,22 @@ function App() {
     void markArticleRead(article, true)
   }, [markArticleRead])
 
-  const toggleFavorite = async (articleId: string) => {
+  const toggleFavorite = useCallback(async (articleId: string) => {
+    if (favoriteArticleIds.current.has(articleId)) return
     const article = articles.find((item) => item.id === articleId)
       ?? libraryArticles.find((item) => item.id === articleId)
     if (!article) return
+    favoriteArticleIds.current.add(articleId)
     try {
       await updateArticleState(articleId, article.state.favorite ? 'unfavorite' : 'favorite')
       await refreshStats()
       showNotice(article.state.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました')
     } catch (error) {
       showApiError(error)
+    } finally {
+      favoriteArticleIds.current.delete(articleId)
     }
-  }
+  }, [articles, libraryArticles, refreshStats, showApiError, showNotice, updateArticleState])
 
   const deleteArticle = useCallback(async (articleId: string) => {
     if (deletingArticleIds.current.has(articleId)) return
@@ -954,10 +959,25 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target
-      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+      if (target instanceof Element) {
+        if (target.closest('input, textarea, select, [contenteditable="true"]')) return
+        if (!articleExpanded && target.closest('[role="dialog"]')) return
+      }
+
+      const favoriteShortcut = event.key.toLocaleLowerCase() === 'f'
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+        && !event.repeat
+        && !event.isComposing
 
       if (articleExpanded) {
         if (event.key === 'Escape') setArticleExpanded(false)
+        if (favoriteShortcut && currentArticle && !animating) {
+          event.preventDefault()
+          void toggleFavorite(currentArticle.id)
+        }
         if (event.key === 'Delete' && currentArticle && !animating && !event.repeat) {
           event.preventDefault()
           void deleteArticle(currentArticle.id)
@@ -981,6 +1001,10 @@ function App() {
       if (event.key === 'ArrowLeft') completeSwipe('skip')
       if (event.key === 'ArrowRight') completeSwipe('save')
       if (event.key === 'Enter' && currentArticle) openOriginalArticle(currentArticle)
+      if (favoriteShortcut && currentArticle && !animating) {
+        event.preventDefault()
+        void toggleFavorite(currentArticle.id)
+      }
       if (event.key === 'Delete' && currentArticle && !animating && !event.repeat) {
         event.preventDefault()
         void deleteArticle(currentArticle.id)
@@ -989,7 +1013,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [animating, articleExpanded, completeSwipe, currentArticle, deleteArticle, focusMode, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen])
+  }, [animating, articleExpanded, completeSwipe, currentArticle, deleteArticle, focusMode, libraryMode, menuOpen, openOriginalArticle, openTagPickerSourceId, sourceManagerOpen, tagManagerOpen, toggleFavorite])
 
   useEffect(
     () => () => {
@@ -1649,9 +1673,14 @@ function App() {
           </nav>
 
           <div className="keyboard-help">
-            <span><kbd>←</kbd> スキップ</span>
-            <span><kbd>→</kbd> 保存</span>
-            <span><kbd>Del</kbd> 削除</span>
+            <div className="keyboard-help-row">
+              <span><kbd>←</kbd> スキップ</span>
+              <span><kbd>→</kbd> あとで見る</span>
+            </div>
+            <div className="keyboard-help-row">
+              <span><kbd>Del</kbd> 削除</span>
+              <span><kbd>F</kbd> お気に入り</span>
+            </div>
           </div>
         </aside>
 
