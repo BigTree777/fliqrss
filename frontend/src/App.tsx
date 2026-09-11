@@ -11,6 +11,15 @@ type SwipeAction = 'skip' | 'save'
 type LibraryMode = 'favorite' | 'saved' | 'deleted'
 type ColorTheme = 'light' | 'dark'
 type FeedMaxAgeDays = 0 | 1 | 3 | 5 | 7
+type AppScreen = 'reader' | 'sources' | 'tags' | LibraryMode
+
+interface ViewState {
+  screen: AppScreen
+  focusMode: boolean
+  filterMode: FilterMode
+  source: string
+  tag: TagFilter
+}
 
 const ALL_TAGS = '__all__'
 const UNTAGGED = '__untagged__'
@@ -21,6 +30,7 @@ const PREFETCH_THRESHOLD = 5
 const LIBRARY_PAGE_SIZE = 50
 const THEME_STORAGE_KEY = 'fliqrss.theme'
 const FEED_MAX_AGE_STORAGE_KEY = 'fliqrss.feedMaxAgeDays'
+const VIEW_STATE_STORAGE_KEY = 'fliqrss.viewState'
 const DEFAULT_FEED_MAX_AGE_DAYS: FeedMaxAgeDays = 5
 const FEED_MAX_AGE_OPTIONS: { value: FeedMaxAgeDays; label: string }[] = [
   { value: 1, label: '1日' },
@@ -56,6 +66,61 @@ function storedFeedMaxAgeDays(): FeedMaxAgeDays {
   return DEFAULT_FEED_MAX_AGE_DAYS
 }
 
+const defaultViewState: ViewState = {
+  screen: 'reader',
+  focusMode: false,
+  filterMode: 'source',
+  source: ALL_SOURCES,
+  tag: ALL_TAGS,
+}
+
+function screenFromHash(hash = window.location.hash): AppScreen | null {
+  if (hash === '#/') return 'reader'
+  if (hash === '#/sources') return 'sources'
+  if (hash === '#/tags') return 'tags'
+  if (hash === '#/favorites') return 'favorite'
+  if (hash === '#/saved') return 'saved'
+  if (hash === '#/deleted') return 'deleted'
+  return null
+}
+
+function hashForScreen(screen: AppScreen): string {
+  if (screen === 'reader') return '#/'
+  if (screen === 'sources') return '#/sources'
+  if (screen === 'tags') return '#/tags'
+  if (screen === 'favorite') return '#/favorites'
+  if (screen === 'saved') return '#/saved'
+  return '#/deleted'
+}
+
+function storedViewState(): ViewState {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(VIEW_STATE_STORAGE_KEY) ?? 'null')
+    if (!value || typeof value !== 'object') return defaultViewState
+    const stored = value as Record<string, unknown>
+    const screen = typeof stored.screen === 'string' && ['reader', 'sources', 'tags', 'favorite', 'saved', 'deleted'].includes(stored.screen)
+      ? stored.screen as AppScreen
+      : defaultViewState.screen
+    return {
+      screen,
+      focusMode: stored.focusMode === true,
+      filterMode: stored.filterMode === 'tag' ? 'tag' : 'source',
+      source: typeof stored.source === 'string' && stored.source ? stored.source : ALL_SOURCES,
+      tag: typeof stored.tag === 'string' && stored.tag ? stored.tag : ALL_TAGS,
+    }
+  } catch {
+    return defaultViewState
+  }
+}
+
+function initialViewState(): ViewState {
+  const stored = storedViewState()
+  return {
+    ...stored,
+    screen: screenFromHash() ?? stored.screen,
+  }
+}
+
 const emptyArticleStats: ArticleStats = {
   feed: 0,
   favorite: 0,
@@ -69,9 +134,8 @@ const emptyArticleStats: ArticleStats = {
 }
 
 function libraryModeFromHash(): LibraryMode | null {
-  if (window.location.hash === '#/favorites') return 'favorite'
-  if (window.location.hash === '#/saved') return 'saved'
-  if (window.location.hash === '#/deleted') return 'deleted'
+  const screen = screenFromHash()
+  if (screen === 'favorite' || screen === 'saved' || screen === 'deleted') return screen
   return null
 }
 
@@ -170,10 +234,11 @@ function SourceFailureList({ failures }: { failures: SourceFailure[] }) {
 }
 
 function App() {
+  const [startupViewState] = useState(initialViewState)
   const [theme, setTheme] = useState<ColorTheme>(initialTheme)
   const [feedMaxAgeDays, setFeedMaxAgeDays] = useState<FeedMaxAgeDays>(storedFeedMaxAgeDays)
-  const [filterMode, setFilterMode] = useState<FilterMode>('source')
-  const [source, setSource] = useState(ALL_SOURCES)
+  const [filterMode, setFilterMode] = useState<FilterMode>(startupViewState.filterMode)
+  const [source, setSource] = useState(startupViewState.source)
   const [articles, setArticles] = useState<Article[]>([])
   const [nextCursor, setNextCursor] = useState<string | undefined>()
   const [feedTotal, setFeedTotal] = useState(0)
@@ -185,7 +250,7 @@ function App() {
   const [libraryTotal, setLibraryTotal] = useState(0)
   const [libraryLoading, setLibraryLoading] = useState(false)
   const [managedSources, setManagedSources] = useState<Source[]>([])
-  const [sourceManagerOpen, setSourceManagerOpen] = useState(() => window.location.hash === '#/sources')
+  const [sourceManagerOpen, setSourceManagerOpen] = useState(startupViewState.screen === 'sources')
   const [newSourceName, setNewSourceName] = useState('')
   const [newSourceUrl, setNewSourceUrl] = useState('')
   const [opmlFile, setOPMLFile] = useState<File | null>(null)
@@ -202,9 +267,9 @@ function App() {
   const [editingSourceName, setEditingSourceName] = useState('')
   const [savingSourceId, setSavingSourceId] = useState<string | null>(null)
   const [markingSourceId, setMarkingSourceId] = useState<string | null>(null)
-  const [tag, setTag] = useState<TagFilter>(ALL_TAGS)
+  const [tag, setTag] = useState<TagFilter>(startupViewState.tag)
   const [managedTags, setManagedTags] = useState<Tag[]>([])
-  const [tagManagerOpen, setTagManagerOpen] = useState(() => window.location.hash === '#/tags')
+  const [tagManagerOpen, setTagManagerOpen] = useState(startupViewState.screen === 'tags')
   const [menuOpen, setMenuOpen] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [editingTagId, setEditingTagId] = useState<string | null>(null)
@@ -212,9 +277,12 @@ function App() {
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [animating, setAnimating] = useState(false)
-  const [focusMode, setFocusMode] = useState(false)
+  const [focusMode, setFocusMode] = useState(startupViewState.screen === 'reader' && startupViewState.focusMode)
   const [articleExpanded, setArticleExpanded] = useState(false)
-  const [libraryMode, setLibraryMode] = useState<LibraryMode | null>(() => libraryModeFromHash())
+  const [libraryMode, setLibraryMode] = useState<LibraryMode | null>(() => {
+    const screen = startupViewState.screen
+    return screen === 'favorite' || screen === 'saved' || screen === 'deleted' ? screen : null
+  })
   const [notice, setNotice] = useState('')
   const [apiError, setApiError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -229,6 +297,26 @@ function App() {
   const libraryRequestID = useRef(0)
   const deletingArticleIds = useRef(new Set<string>())
   const favoriteArticleIds = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (!screenFromHash()) {
+      window.history.replaceState(null, '', hashForScreen(startupViewState.screen))
+    }
+  }, [startupViewState])
+
+  useEffect(() => {
+    const screen: AppScreen = sourceManagerOpen
+      ? 'sources'
+      : tagManagerOpen
+        ? 'tags'
+        : libraryMode ?? 'reader'
+    const viewState: ViewState = { screen, focusMode, filterMode, source, tag }
+    try {
+      window.localStorage.setItem(VIEW_STATE_STORAGE_KEY, JSON.stringify(viewState))
+    } catch {
+      // The current view still applies for this session when storage is unavailable.
+    }
+  }, [filterMode, focusMode, libraryMode, source, sourceManagerOpen, tag, tagManagerOpen])
 
   useEffect(() => {
     const root = document.documentElement
@@ -361,6 +449,16 @@ function App() {
       ])
       setManagedSources(nextSources)
       setManagedTags(nextTags)
+      setSource((current) => (
+        current === ALL_SOURCES || nextSources.some((item) => item.id === current)
+          ? current
+          : ALL_SOURCES
+      ))
+      setTag((current) => (
+        current === ALL_TAGS || current === UNTAGGED || nextTags.some((item) => item.id === current)
+          ? current
+          : ALL_TAGS
+      ))
       setArticleStats(nextStats)
       setApiError('')
     } catch (error) {
