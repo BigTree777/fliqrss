@@ -1171,8 +1171,16 @@ kbd {
 }
 
 .app-shell.is-focus-mode {
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app-shell.is-focus-mode .article-card:not(.is-expanded) {
+  touch-action: none;
 }
 
 .app-shell.is-focus-mode .topbar,

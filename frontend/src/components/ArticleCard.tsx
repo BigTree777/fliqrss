@@ -152,7 +152,7 @@ export function ArticleCard({
   return (
     <article
       aria-label={article.title}
-      className={`article-card ${dragging ? 'is-dragging' : ''}`}
+      className={`article-card${dragging ? ' is-dragging' : ''}${expanded ? ' is-expanded' : ''}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
